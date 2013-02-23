@@ -41,6 +41,13 @@ deriving instance (Show (r a), Show (r Tree), Show (r Nat)) => Show (ExprF r a)
 deriving instance Show (Some (HFix ExprF))
 deriving instance Show (Some (ExprF (K D)))
 
+instance Typeable1 (ExprF (K D)) where
+  typeOf1 t@Tip         = typeOf (t :: ExprF (K D) Tree)
+  typeOf1 t@(Bin _ _ _) = typeOf (t :: ExprF (K D) Tree)
+  typeOf1 t@Zero        = typeOf (t :: ExprF (K D) Nat)
+  typeOf1 t@(Succ _)    = typeOf (t :: ExprF (K D) Nat)
+  typeOf1 _ = typeOf (undefined :: Integer)
+
 instance HFunctor ExprF where
   hfmap f Tip = Tip
   hfmap f (Bin l a r) = Bin (f l) (f a) (f r)
@@ -97,9 +104,14 @@ t0 = bin (bin tip 0 tip) 1 (bin tip 2 tip)
 runProver :: Prover ExprF a -> (a, VO ExprF)
 runProver = runWriter . unProver
 
+runVerifier :: VO ExprF -> Verifier ExprF a -> Either VerifierError a
+runVerifier vo f = evalState (runErrorT . unVerifier $ f) vo
+
 main = do
   mapM_ print . snd . runProver $ lookupM (fromInt 0) t0
   mapM_ print . snd . runProver $ lookupM (fromInt 3) t0
+  p <- return . snd . runProver $ lookupM (fromInt 3) t0
+  print . runVerifier p $ lookupM (hcata hhash (fromInt 3)) (hcata hhash t0)
   --lookupM (fromInt 0) t0
 
 
