@@ -1,11 +1,11 @@
 {-# LANGUAGE 
-  GADTs,
+  GADTs, BangPatterns,
   FlexibleInstances, FlexibleContexts, UndecidableInstances,
   StandaloneDeriving, TypeOperators, Rank2Types,
   MultiParamTypeClasses, ConstraintKinds,
   DeriveTraversable, DeriveFunctor, DeriveFoldable, DeriveDataTypeable,
   TypeFamilies, FunctionalDependencies, 
-  ScopedTypeVariables, GeneralizedNewtypeDeriving
+  GeneralizedNewtypeDeriving
  #-}
 
 module Merkle where
@@ -16,9 +16,11 @@ import Control.Monad.State
 import Control.Monad.Writer
 import Control.Monad.Identity
 import Control.Monad.Error
+import Data.List
 import Data.Maybe
 import Data.Hashable
 import Data.Typeable
+import Unsafe.Coerce
 
 {- Higher order functors
    from http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
@@ -48,21 +50,21 @@ instance Show x => Show (K x a) where show = show . unK
                                       
 -- Natural over the index
 
-data Some f = forall a. Typeable a => Some (f a)
+data Some f = forall a. Some (f a)
 
-some :: (forall a. Typeable a => f a -> b) -> Some f -> b
-some f (Some x) = f x
+some :: (forall a. f a -> b) -> Some f -> b
+some f (Some !x) = x `seq` f x
 
 {- Abstract definition for hash functions -}
 
 type D = Int
 
-class HHashable f where
+class HHashable (f :: (* -> *) -> * -> *) where
   hhash :: f (K D) :~> (K D)
 
 class Monad m => Monadic f d m where
-  construct :: Typeable a => f d a -> m (d a)
-  destruct  :: Typeable a =>   d a -> m (f d a)
+  construct :: f d a -> m (d a)
+  destruct  ::   d a -> m (f d a)
 
 -- Distributive law requirement here?
 -- Laws:
@@ -81,6 +83,8 @@ instance (HFunctor f, Show (Some (HFix f))) => Monadic f (HFix f) IO where
 {- Prover -}
 
 type VO f = [Some (f (K D))]
+type Collision f = (f (K D), f (K D))
+
 newtype Prover f a = Prover { unProver :: Writer (VO f) a }
                 deriving (Monad, MonadWriter (VO f))
 
@@ -95,16 +99,39 @@ instance (HHashable f, HFunctor f) => Monadic f (HFix f) (Prover f) where
 
 data VerifierError = VerifierError deriving Show
 instance Error VerifierError where strMsg _ = VerifierError
-
+  
 newtype Verifier f a = Verifier { unVerifier :: (ErrorT VerifierError (State (VO f))) a }
                        deriving (Monad, MonadError VerifierError, MonadState (VO f))
 
-instance (Typeable1 (f (K D)), HHashable f) => Monadic f (K D) (Verifier f) where
+instance (HHashable f) => Monadic f (K D) (Verifier f) where
   construct = return . hhash
   destruct (K d) = do
     t':xs <- get
-    t <- return $ some cast t'
-    unless (isJust t) $ throwError VerifierError
     when (not $ some (unK . hhash) t' == d) $ throwError VerifierError
+    t <- return $ some unsafeCoerce t'
     put xs
-    return $ fromJust t
+    return t
+
+{- Extractor -}
+
+{-
+extractor :: (HHashable f) =>
+             (forall m d. Monadic f (K D) m => D -> m a) ->
+             HFix f -> VO f ->        -- Original data structure, proof object
+             Either (Collision f)  a  -- A hash collision, or the correct answer
+extractor f t vo = 
+  case find collides (zip vo vo') of
+    Just collision -> Left collision
+    Nothing -> Right result where 
+      Right result = evalStateT (runErrorT . unVerifier $ f) (hcata hhash t)
+  where
+  hash = unK . hhash
+  vo' = snd . runWriter $ f t
+  collides (x,y) = hash x == hash y && not (x == y)
+-}
+
+--runProver :: Monadic f (HFix f) (Prover f) => Prover f a -> (a, VO f)
+--runProver = runWriter . unProver
+
+--runVerifier :: VO Univ -> Verifier Univ a -> Either VerifierError a
+--runVerifier vo f = evalState (runErrorT . unVerifier $ f) vo

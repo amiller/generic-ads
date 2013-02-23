@@ -18,9 +18,11 @@ import Control.Compose
 import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Writer
+import Control.Monad.Error
 import Control.Monad.State
 import Data.Hashable
 import Data.Typeable
+import Data.List
 import Prelude hiding (abs)
 
 import Merkle
@@ -39,16 +41,10 @@ deriving instance Show Clo
 deriving instance Show Env
 deriving instance Show Conf
 
-deriving instance Typeable Term
-deriving instance Typeable Clo
-deriving instance Typeable Env
-deriving instance Typeable Conf
-deriving instance Typeable Kont
-
 deriving instance (Show (r a), Show (r Term), Show (r Clo), 
                    Show (r Env), Show (r Kont), Show (r Conf)) => Show (Univ r a)
-deriving instance Show (Some (HFix Univ))
-deriving instance Show k => Show (Some (Univ (K k)))
+instance Show (Some (HFix Univ)) where show = some show
+instance Show k => Show (Some (Univ (K k))) where show = some show
 
 data Univ :: (* -> *) -> * -> * where
   T   :: r Term -> r Env -> r Kont -> Univ r Conf
@@ -103,7 +99,7 @@ step (V (Fun (CLO t e) k) v) = T t (v:e) k
 -}
 
 
-nthM :: Monadic Univ d m => Int -> d Env -> m (d Clo)
+nthM :: Monadic Univ d m => Int -> (d Env) -> m (d Clo)
 nthM n = nth n <=< destruct where
   nth 0 (ENV c _) = return c
   nth n (ENV _ e) | n > 0 = nthM (n-1) e
@@ -159,11 +155,32 @@ tSUCC = abs (abs (abs (app (ind 1) (app (app (ind 2) (ind 1)) (ind 0)))))
 
 tY = app (abs (app (ind 0) (ind 0))) (abs (app (ind 0) (ind 0)))
 
-runProver' :: Prover Univ a -> (a, VO Univ)
-runProver' = runWriter . unProver
+runProver :: Prover Univ a -> (a, VO Univ)
+runProver = runWriter . unProver
+
+runVerifier :: VO Univ -> Verifier Univ a -> Either VerifierError a
+runVerifier vo f = evalState (runErrorT . unVerifier $ f) vo
+
+{-
+extractor :: (HHashable f) =>
+             (forall m d. Monadic f d m => d a -> m b) ->
+             HFix f -> VO f ->        -- Original data structure, proof object
+             Either (Collision f) b     -- A hash collision, or the correct answer
+extractor f t vo = 
+  case find collides (zip vo vo') of
+    Just collision -> Left collision
+    Nothing -> Right result where 
+      Right result = evalStateT (runErrorT . unVerifier $ f) (hcata hhash t)
+  where
+  hash = unK . hhash
+  vo' = snd . runWriter $ f t
+  collides (x,y) = hash x == hash y && not (x == y)
+-}
 
 main = do  
-  mapM_ print . snd . runProver' . evalM $ app (app tAND (fromBool True)) (fromBool False)
-  mapM_ print . snd . runProver' . evalM $ app tNOT (fromBool False)
-  mapM_ print . snd . runProver' . evalM $ app tSUCC (fromNat 0)
-  evalM $ app tSUCC (fromNat 0)
+  mapM_ print . snd . runProver . evalM $ app (app tAND (fromBool True)) (fromBool False)
+  mapM_ print . snd . runProver . evalM $ app tNOT (fromBool False)
+  evalM $ app tSUCC (fromNat 0)  
+  mapM_ print . snd . runProver . evalM $ app tSUCC (fromNat 0)
+  p <- return . snd . runProver . evalM $ app tSUCC (fromNat 0)
+  print . runVerifier p . evalM . hcata hhash $ app tSUCC (fromNat 0)
