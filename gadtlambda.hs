@@ -182,5 +182,5 @@ main = do
   mapM_ print . snd . runProver . evalM $ app tNOT (fromBool False)
   evalM $ app tSUCC (fromNat 0)  
   mapM_ print . snd . runProver . evalM $ app tSUCC (fromNat 0)
-  p <- return . snd . runProver . evalM $ app tSUCC (fromNat 0)
+  p <- return . snd . runProver . evalM $ annotate $ app tSUCC (fromNat 0)
   print . runVerifier p . evalM . hcata hhash $ app tSUCC (fromNat 0)

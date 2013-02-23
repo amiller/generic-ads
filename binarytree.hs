@@ -8,7 +8,6 @@
   GeneralizedNewtypeDeriving
  #-}
 
-import Control.Compose
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Writer
@@ -84,6 +83,8 @@ lookupM a = look where
 fromInt 0 = HFix Zero
 fromInt n = HFix . Succ $ fromInt (n-1)
 
+
+
 tip = HFix Tip
 bin l a r = HFix $ Bin l (fromInt a) r
 
@@ -103,7 +104,7 @@ runVerifier vo f = evalState (runErrorT . unVerifier $ f) vo
 main = do
   mapM_ print . snd . runProver $ lookupM (fromInt 0) t0
   mapM_ print . snd . runProver $ lookupM (fromInt 3) t0
-  p <- return . snd . runProver $ lookupM (fromInt 3) t0
+  p <- return . snd . runProver $ lookupM (annotate (fromInt 3)) (annotate t0)
   print . runVerifier p $ lookupM (hcata hhash (fromInt 3)) (hcata hhash t0)
   print . runVerifier p $ lookupM (hcata hhash (fromInt 0)) (hcata hhash t0)
   --lookupM (fromInt 0) t0
