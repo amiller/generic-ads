@@ -1,10 +1,7 @@
 {-# LANGUAGE 
-  GADTs, BangPatterns,
-  FlexibleInstances, FlexibleContexts, UndecidableInstances,
+  GADTs, FlexibleInstances, UndecidableInstances,
   StandaloneDeriving, TypeOperators, Rank2Types,
-  MultiParamTypeClasses, ConstraintKinds,
-  DeriveTraversable, DeriveFunctor, DeriveFoldable, DeriveDataTypeable,
-  TypeFamilies, FunctionalDependencies, 
+  MultiParamTypeClasses, DeriveFunctor, KindSignatures,
   GeneralizedNewtypeDeriving
  #-}
 
@@ -18,7 +15,6 @@ import Control.Monad.Error
 import Data.List
 import Data.Maybe
 import Data.Hashable
-import Data.Typeable
 import Unsafe.Coerce
 
 {- Higher order functors
@@ -71,7 +67,7 @@ instance Show x => Show (K x a) where show = show . unK
 data Some f = forall a. Some (f a)
 
 some :: (forall a. f a -> b) -> Some f -> b
-some f (Some !x) = x `seq` f x
+some f (Some x) = f x
 
 {- Abstract definition for hash functions -}
 

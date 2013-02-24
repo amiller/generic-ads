@@ -1,10 +1,7 @@
 {-# LANGUAGE 
-  GADTs, BangPatterns, ScopedTypeVariables,
-  FlexibleInstances, FlexibleContexts, UndecidableInstances,
+  GADTs, FlexibleInstances, FlexibleContexts, UndecidableInstances,
   StandaloneDeriving, TypeOperators, Rank2Types,
-  MultiParamTypeClasses, ConstraintKinds,
-  DeriveTraversable, DeriveFunctor, DeriveFoldable, DeriveDataTypeable,
-  TypeFamilies, FunctionalDependencies, 
+  MultiParamTypeClasses, DeriveFunctor, KindSignatures,
   GeneralizedNewtypeDeriving
  #-}
 
@@ -14,8 +11,8 @@ import Control.Monad.Writer
 import Control.Monad.Identity
 import Control.Monad.Error
 import Data.Hashable
-import Data.Typeable
 
+import Tree2Dot
 import Merkle
 
 
@@ -25,9 +22,6 @@ data Tree where
 data Nat where
 deriving instance Show Tree
 deriving instance Show Nat
-
-deriving instance Typeable Tree
-deriving instance Typeable Nat
 
 data ExprF :: (* -> *) -> * -> * where
   Tip :: ExprF r Tree
@@ -83,8 +77,6 @@ lookupM a = look where
 fromInt 0 = HFix Zero
 fromInt n = HFix . Succ $ fromInt (n-1)
 
-
-
 tip = HFix Tip
 bin l a r = HFix $ Bin l (fromInt a) r
 
@@ -108,6 +100,21 @@ main = do
   print . runVerifier p $ lookupM (hcata hhash (fromInt 3)) (hcata hhash t0)
   print . runVerifier p $ lookupM (hcata hhash (fromInt 0)) (hcata hhash t0)
   --lookupM (fromInt 0) t0
+
+
+
+rbpToRose :: HFix ExprF a -> Rose Node
+rbpToRose = unK . hcata alg where
+  alg :: ExprF (K (Rose Node)) :~> K (Rose Node)
+  alg Zero = K $ leaf Point
+  alg (Succ (K n)) = K $ Branch (Node "black" "S") [n]
+  alg Tip = K $ leaf Point
+  alg (Bin (K l) (K a) (K r)) = K $ Branch (Node "red" "B") [l, a, r]
+
+--rbpToRose' :: Show k => RBP k -> Rose Node 
+--rbpToRose' Leaf = leaf Point
+--rbpToRose' (T c l k r) = Branch (Node c $ show k) $ map rbpToRose' [l, r]
+
 
 
 

@@ -23,8 +23,10 @@ import Control.Monad.State
 import Data.Hashable
 import Data.Typeable
 import Data.List
+import Text.Printf
 import Prelude hiding (abs)
 
+import Tree2Dot
 import Merkle
 
 
@@ -112,7 +114,7 @@ stepM (T t' e k) = destruct t' >>= step' where
   step' (APP t0 t1) = do
     clo <- construct (ARG t1 e k)
     return (T t0 e clo)
---  step' (BASE n) = do { clo <- construct (CLO t' e) ; return (V k clo) }
+  --  step' (BASE n) = do { clo <- construct (CLO t' e) ; return (V k clo) }
 stepM (V k' v) = destruct k' >>= step' where
   step' (ARG t e k) = do { k' <- construct (FUN v k) ; return (T t e k') }
   step' (FUN c k) = do
@@ -120,12 +122,38 @@ stepM (V k' v) = destruct k' >>= step' where
     env <- construct (ENV v e)
     return (T t env k)
 
+
 injectM :: Monadic Univ d m => d Term -> m (Univ d Conf)
 injectM t = do
   enve <- construct ENVE
   stop <- construct STOP
   return (T t enve stop)
+  
+inject :: HFix Univ Term -> Univ (HFix Univ) Conf
+inject t = T t (HFix ENVE) (HFix STOP)
 
+tick :: MonadState Int m => m Int
+tick = do { x <- get; put (x + 1); return x }
+
+steps2png :: String -> HFix Univ Term -> IO ()
+steps2png directory term = runStateT (iter . inject $ term) 0 >> return () where
+  iter :: Univ (HFix Univ) Conf -> StateT Int IO ()
+  iter v = do
+    x <- tick
+    liftIO . putStrLn . show $ v
+    liftIO . tree2png (printf "%s/step_%05d.png" directory x) . rbpToRose $ HFix v
+    unless (stopped v) (iter . runIdentity $ stepM v) where
+      stopped (V (HFix STOP) _) = True
+      stopped _ = False
+    
+    
+{-  
+              t >>= iter where
+  iter v@(V s c) = destruct s >>= iter' where
+    iter' STOP = return c
+    iter' _ = stepM v >>= iter
+  iter v = stepM v >>= iter
+-}
 evalM :: Monadic Univ d m => d Term -> m (d Clo)
 evalM t = injectM t >>= iter where
   iter v@(V s c) = destruct s >>= iter' where
@@ -153,6 +181,7 @@ fromNat n = abs (abs (apps n)) where
   
 tSUCC = abs (abs (abs (app (ind 1) (app (app (ind 2) (ind 1)) (ind 0)))))
 
+tPLUS = abs$abs$abs$abs$ (app (app (ind 3) (ind 1)) (app (app (ind 2) (ind 1)) (ind 0)))
 tY = app (abs (app (ind 0) (ind 0))) (abs (app (ind 0) (ind 0)))
 
 runProver :: Prover Univ a -> (a, VO Univ)
@@ -180,7 +209,24 @@ extractor f t vo =
 main = do  
   mapM_ print . snd . runProver . evalM $ app (app tAND (fromBool True)) (fromBool False)
   mapM_ print . snd . runProver . evalM $ app tNOT (fromBool False)
-  evalM $ app tSUCC (fromNat 0)  
+  evalM $ app tSUCC (fromNat 0)
   mapM_ print . snd . runProver . evalM $ app tSUCC (fromNat 0)
   p <- return . snd . runProver . evalM $ annotate $ app tSUCC (fromNat 0)
   print . runVerifier p . evalM . hcata hhash $ app tSUCC (fromNat 0)
+
+
+rbpToRose :: HFix Univ a -> Rose Node
+rbpToRose = unK . hcata alg where
+  b a l = Branch (Node "black" a) l
+  alg :: Univ (K (Rose Node)) :~> K (Rose Node)
+  alg (T   (K t) (K e) (K k)) = K $ b "T" [t, e, k]
+  alg (V   (K k) (K v))       = K $ b "V" [k, v]
+  alg (CLO (K t) (K e))       = K $ b "CLO" [t, e]
+  alg (ARG (K t) (K e) (K k)) = K $ b "ARG" [t, e, k]
+  alg (FUN (K c) (K k))       = K $ b "FUN" [c, k]
+  alg (ENV (K c) (K e))       = K $ b "ENV" [c, e]
+  alg (IND n)                 = K $ b ("IND:"++show n) []
+  alg (APP (K x) (K y))       = K $ b "APP" [x, y]
+  alg (ABS (K t))             = K $ b "ABS" [t]
+  alg STOP = K $ b "STOP" []
+  alg ENVE = K $ b "ENVE" []
