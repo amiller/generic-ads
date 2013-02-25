@@ -54,6 +54,9 @@ hcata alg = alg . hfmap (hcata alg) . unHFix
 hana :: HFunctor h => (f :~> h f) -> f :~> HFix h
 hana coalg = HFix . hfmap (hana coalg) . coalg
 
+hpara :: HFunctor h => (h (f :*: HFix h) :~> f) -> (HFix h :~> f)
+hpara psi = psi . hfmap (hpara psi &&&& id) . unHFix
+
 -- Standard Functors
 newtype I x = I { unI :: x }
 newtype K x y = K { unK :: x }
@@ -96,6 +99,9 @@ instance (HFunctor f) => Monadic f (HFix f) Identity where
   construct = return . HFix
   destruct = return . unHFix
 
+instance (HHashable f, HFunctor f) => Monadic f (HFix (Annot f)) Identity where
+  construct = return . HFix . Ann . (id &&&& hhash . hfmap (hsnd . unAnn . unHFix))
+  destruct (HFix (Ann (e :*: _))) = return e
 
 instance (HFunctor f, Show (Some (HFix f))) => Monadic f (HFix f) IO where
   construct = let m x = do { print ("Cnst", Some x) ; return x } in m . HFix
