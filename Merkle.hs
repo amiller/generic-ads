@@ -19,6 +19,7 @@ import Data.Maybe
 import Data.Hashable
 import Unsafe.Coerce
 import Data.Hashable
+import Prelude hiding ((**))
 
 {- Higher order functors
    from http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
@@ -107,6 +108,7 @@ unannotate = hana (hfst . unAnn . unHFix)
 
 -- Base Types
 newtype BaseT a = BaseT { unBase ∷ a }
+data a :* b
 data a :→ b
 infixr 5 :→
   
@@ -116,11 +118,30 @@ class EDSL term where
   lamU ∷ (a → term b) → term (BaseT a :→ b)
   lam  ∷ (term a → term b) → term (a :→ b)
   app  ∷ term (a :→ b) → term a → term b
+  (**) ∷ term a → term b → term (a :* b)
+  tfst ∷ term (a :* b) → term a
+  tsnd ∷ term (a :* b) → term b
+  tif  ∷ term (BaseT Bool) → term a → term a → term a
+
+f `o` g = lam$ \x -> f `app` (g `app` x)
+
+tPair ∷ EDSL term => term (a :→ b :→ a :* b)
+tPair = lam$ \a -> lam$ \b -> a ** b
+
+tFst ∷ EDSL term => term (a :* b :→ a)
+tFst = lam tfst
+
+tSnd ∷ EDSL term => term (a :* b :→ b)
+tSnd = lam tsnd
+
+tIf  ∷ EDSL term => term (BaseT Bool :→ a :→ a :→ a)
+tIf = lam$ \cond -> lam$ \then' -> lam$ \else' -> tif cond then' else'
 
 -- a. Example denotation (for direct)
 type family ISem a ∷ *
 type instance ISem (BaseT a) = a
 type instance ISem (a :→ b) = ISem a → ISem b
+type instance ISem (a :* b) = (ISem a, ISem b)
 newtype ISem' a = ISem' {unISem' :: ISem a}
 
 instance EDSL ISem' where
@@ -128,11 +149,16 @@ instance EDSL ISem' where
   lamU f = ISem' $ unISem' . f
   lam f = ISem' $ unISem' . f . ISem'
   app f x = ISem' $ (unISem' f) (unISem' x)
+  a ** b = ISem' $ (unISem' a , unISem' b)
+  tfst = ISem' . fst . unISem'
+  tsnd = ISem' . snd . unISem'
+  tif i t e = if unISem' i then t else e
 
 -- b. Monadic denotation
 type family MSem (f ∷ (* → *) → * → *) (d ∷ * → *) (m ∷ * → *) a ∷ *
 type instance MSem f d m (BaseT a) = a
 type instance MSem f d m (a :→ b) = m (MSem f d m a) → m (MSem f d m b)
+type instance MSem f d m (a :* b) = (MSem f d m a, MSem f d m b)
 newtype MSem' f d m a = MSem' { unMSem' :: m (MSem f d m a) }
 
 instance Monad m ⇒ EDSL (MSem' f d m) where
@@ -140,8 +166,13 @@ instance Monad m ⇒ EDSL (MSem' f d m) where
   lamU f = MSem' . return $ (>>= unMSem' . f)
   lam f = MSem' . return $ unMSem' . f . MSem'
   app f x = MSem' $ unMSem' f >>= ($ (unMSem' x))
-
-
+  a ** b = MSem' $ do
+    a' <- unMSem' a;
+    b' <- unMSem' b;
+    return (a' , b')
+  tfst a = MSem' $ unMSem' a >>= return . fst
+  tsnd a = MSem' $ unMSem' a >>= return . snd
+  tif i t e = MSem' $ unMSem' i >>= \cond -> if cond then unMSem' t else undefined unMSem' e
 
 {- Language extended with authenticated types -}
 
@@ -194,22 +225,26 @@ type Collision f = (Some (f (K D)), Some (f (K D)))
 newtype Prover f a = Prover { unProver ∷ Writer (VO f) a }
                 deriving (Monad, MonadWriter (VO f))
 
-instance (HHashable f, HFunctor f) => Monadic f (HFix f) (Prover f) where
+{- Inefficient Prover (works on unannotated trees) -}
+
+instance (HHashable f, HFunctor f) ⇒ Monadic f (HFix f) (Prover f) where
   construct = return . HFix
   destruct (HFix e) = do
     tell [Some $ hfmap (hcata hhash) e]
     return e
 
-runProver ∷ Prover f a → (a, VO f)
-runProver = runWriter . unProver    
-
 {- More efficient Prover (works on annotated trees) -}
 
-instance (HHashable f, HFunctor f) => Monadic f (HFix (Annot f)) (Prover f) where
+instance (HHashable f, HFunctor f) ⇒ Monadic f (HFix (Annot f)) (Prover f) where
   construct = return . HFix . Ann . (id &&&& hhash . hfmap (hsnd . unAnn . unHFix)) where
   destruct (HFix (Ann (e :*: _))) = do
     tell [Some $ hfmap (hsnd . unAnn . unHFix) e]
     return e
+
+
+runProver ∷ Prover f a → (a, VO f)
+runProver = runWriter . unProver    
+
 
 {- Verifier -}
 
@@ -228,14 +263,13 @@ instance (HHashable f) => Monadic f (K D) (Verifier f) where
     put xs
     return t
 
-{- Extractor -}
-
 runVerifier ∷ (HHashable f) => VO f → Verifier f a → Either VerifierError a
 runVerifier vo m = evalState (runErrorT . unVerifier $ m) vo
 
-runVerifier' ∷ (HHashable f) => VO f → K D a → (forall d m. Monadic f d m => d a → m b) → Either VerifierError b
-runVerifier' vo root f = evalState (runErrorT . unVerifier $ f root) vo
 
+{- Extractor -}
+
+-- Application (in semantic domain, rather than terms)
 shapp :: Monad m ⇒ m (m a → m b) → a → m b
 shapp f = join . ap f . return . return
 
