@@ -1,18 +1,15 @@
 {-# LANGUAGE 
-  GADTs, FlexibleInstances, FlexibleContexts, UndecidableInstances,
-  StandaloneDeriving, TypeOperators, Rank2Types,
-  MultiParamTypeClasses, DeriveFunctor, KindSignatures,
-  GeneralizedNewtypeDeriving, ScopedTypeVariables, UnicodeSyntax
+  GADTs, FlexibleInstances, FlexibleContexts,
+  StandaloneDeriving, TypeOperators, UndecidableInstances,
+  MultiParamTypeClasses, DeriveFunctor,
+  GeneralizedNewtypeDeriving, ScopedTypeVariables, UnicodeSyntax,
+  DeriveGeneric, TypeFamilies, ConstraintKinds
  #-}
 
 module RedBlack where
 
 import Control.Applicative hiding (some)
 import Control.Monad
-import Control.Monad.State
-import Control.Monad.Writer
-import Control.Monad.Identity
-import Control.Monad.Error
 import Data.Maybe
 import Data.Hashable
 import Text.Printf
@@ -20,35 +17,31 @@ import Tree2Dot
 import Merkle
 import Prelude hiding ((**))
 
-import System.Random
-import Data.Array.IO
+import Data.Serialize
+--import Data.Serialize.Derive (derivePut, deriveGet)   -- dependency conflict, but I should use this
+import GHC.Generics (Generic)
+import Unsafe.Coerce    -- Gasp! But edkmett said it not as bad as it sounds...
 
 -- Red-Black binary tree
 
-type A = Char
+type A = String
 type V = String
-data Col = R | B deriving (Show, Eq)
-data Tree
+data Col = R | B
 
-deriving instance Show Tree
+{-
+  auth Tree := Tip | Bin (R+B) Tree (A,?V) Tree
+ -}
+
+data Tree
+data Chain
 
 data ExprF ∷ (* → *) → * → * where
   Tip :: ExprF r Tree
-  Bin :: Col → r Tree -> (A,Maybe V) -> r Tree -> ExprF r Tree
+  Bin :: Col → r Tree → (A,Maybe V) → r Tree → ExprF r Tree
+  Nil :: ExprF r Chain
+  Cons :: r Tree → r Chain → ExprF r Chain
 
 type Auth a = AuthT ExprF a
-
-deriving instance Show (r a) ⇒ Show (ExprF r a)
-instance Show (Some (HFix ExprF)) where show = some show
-instance Show (Some (ExprF (K D))) where show = some show
-
-instance HFunctor ExprF where
-  hfmap f Tip = Tip
-  hfmap f (Bin c l a r) = Bin c (f l) a (f r)
-
-instance HTraversable ExprF where
-  htraverse f Tip = pure Tip
-  htraverse f (Bin c l a r) = Bin <$> pure c <*> (f l) <*> pure a <*> (f r)
 
 instance Hashable Col where
   hash R = hash "R"
@@ -57,8 +50,26 @@ instance Hashable Col where
 instance HHashable ExprF where
   hhash Tip = K $ hash "Tip"
   hhash (Bin c (K l) a (K r)) = K $ hash ("Bin", c, l, a, r)
+  hhash Nil = K $ hash "Nil"
+  hhash (Cons (K x) (K xs)) = K $ hash ("Cons", x, xs)
+  
+type Prv a = Prover ExprF (MSem ExprF (HFix (Annot ExprF)) (Prover ExprF) a)
+asP ∷ MSem' ExprF (HFix (Annot ExprF)) (Prover ExprF) a → Prv a
+asP = unMSem'
+
+type Vrf a = Verifier ExprF (MSem ExprF (K D) (Verifier ExprF) a)
+asV ∷ MSem' ExprF (K D) (Verifier ExprF) a → Vrf a
+asV = unMSem'
+
+asIO ∷ MSem' ExprF (HFix ExprF) IO a → IO (MSem ExprF (HFix ExprF) IO a)
+asIO = unMSem'
 
 
+{-
+ Here are some functions defined on these data structures:
+ -}
+
+-- 1. In-term tree constructors
 tTip ∷ (EDSL term, AuthDSL ExprF term) => term (Auth Tree)
 tTip = auth Tip
 
@@ -66,6 +77,7 @@ tBin ∷ (EDSL term, AuthDSL ExprF term) =>
   term (BaseT Col :→ Auth Tree :→ BaseT (A,Maybe V) :→ Auth Tree :→ Auth Tree)
 tBin = lamU$ \c -> lam$ \l -> lamU$ \a -> lam$ \r -> auth (Bin c (at l) a (at r))
 
+-- 2. Lookup function O(log N)
 tLookup ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ Auth Tree :→ BaseT (Maybe V))
 tLookup = lamU look where
   look a = look'' where
@@ -76,43 +88,42 @@ tLookup = lamU look where
         if a <= a' then look'' `app` unA l 
         else            look'' `app` unA r
 
--- Jeez. I wish I had a pattern match compiler
-tBalanceL ∷ (EDSL term, AuthDSL ExprF term) ⇒ ExprF (ATerm term ExprF) Tree → term (Auth Tree)
-tBalanceL t@(Bin B l a r) = lamA bal' `app` unA l where
+
+-- 3. Insert function (with balancing rules)
+
+{- Writing this code is like having teeth pulled. No one enjoys implementing
+   the RedBlack tree balancing algrithms. Especially since for my interests I
+   want a RedBlack+ tree (dictionary with values stored just at the leaves).
+
+   This would be much easier if I had a front-end "sugared" language that would
+   compile pattern matches for me.
+-}
+
+tBalanceL ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree)
+tBalanceL = lamA$ tBalanceL'
+tBalanceL' t@(Bin B l a r) = lamA bal' `app` unA l where
   bal' (Bin R l' a' r') = lamA bal'' `app` unA l' where
     bal'' (Bin R l'' a'' r'') = auth$Bin R (at.auth$Bin B l'' a'' r'') a' (at.auth$Bin B r' a r)
     bal'' _ = lamA bal''' `app` unA r'
     bal''' (Bin R l'' a'' r'') = auth$Bin R (at.auth$Bin B l' a' l'') a'' (at.auth$Bin B r'' a r)
     bal''' _ = auth t
   bal' _ = auth t
-tBalanceL t = auth t
+tBalanceL' t = auth t
 
-tBalanceR ∷ (EDSL term, AuthDSL ExprF term) ⇒ ExprF (ATerm term ExprF) Tree → term (Auth Tree)
-tBalanceR t@(Bin B l a r) = lamA bal' `app` unA r where
+tBalanceR ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree)
+tBalanceR = lamA$ tBalanceR' 
+tBalanceR' t@(Bin B l a r) = lamA bal' `app` unA r where
   bal' (Bin R l' a' r') = lamA bal'' `app` unA l' where
     bal'' (Bin R l'' a'' r'') = auth$Bin R (at.auth$Bin B l a l'') a'' (at.auth$Bin B r'' a' r')
     bal'' _ = lamA bal''' `app` unA r'
     bal''' (Bin R l'' a'' r'') = auth$Bin R (at.auth$Bin B l a l') a' (at.auth$Bin B l'' a'' r'')
     bal''' _ = auth t
   bal' _ = auth t
-tBalanceR t = auth t
-
-tUnbalancedL ∷ (EDSL term, AuthDSL ExprF term) ⇒ ExprF (ATerm term ExprF) Tree → term (Auth Tree :* BaseT Bool)
-tUnbalancedL t@(Bin c l a r) = lamA bal' `app` unA l where
-  bal' (Bin B l' a' r') = lamA tBalanceL `app` (auth$Bin B (at.auth$Bin R l' a' r') a r) ** unit (c == B)
-  bal' (Bin R l' a' r') = (auth$Bin B l' a' (at$lamA tBalanceL `app` (auth$Bin B (at$lamA red `app` unA r') a r))) ** unit False where
-  red (Bin _ l a r) = auth$ Bin R l a r
-  
-tUnbalancedR ∷ (EDSL term, AuthDSL ExprF term) ⇒ ExprF (ATerm term ExprF) Tree → term (Auth Tree :* BaseT Bool)
-tUnbalancedR t@(Bin c l a r) = lamA bal' `app` unA r where
-  bal' (Bin B l' a' r') = lamA tBalanceR `app` (auth$Bin B l a (at.auth$Bin R l' a' r')) ** unit (c == B)
-  bal' (Bin R l' a' r') = (auth$Bin B (at$lamA tBalanceR `app` (auth$Bin B l a (at$lamA red `app` unA l'))) a' r') ** unit False where
-  red (Bin _ l a r) = auth$ Bin R l a r
+tBalanceR' t = auth t
 
 tInsert ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ BaseT V :→ Auth Tree :→ Auth Tree)
 tInsert = lamU$ \a → lamU$ \v → ins a v where
   ins a v = lamA black `o` ins'' where
-    ins'' ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree)
     ins'' = lamA ins' where
       ins' Tip = auth (Bin B (at.auth$Tip) (a,Just v) (at.auth$Tip))
       ins' n@(Bin c l (a',Just v) r) = case compare a a' of
@@ -121,16 +132,34 @@ tInsert = lamU$ \a → lamU$ \v → ins a v where
         GT → auth$ Bin R (at.auth$n)   (a',Nothing) (at$ins' Tip)
       ins' (Bin c l av@(a',_) r) = case compare a a' of
         EQ → error "duplicate insert"
-        LT → tBalanceL (Bin c (at$ins'' `app` unA l) av r)
-        GT → tBalanceR (Bin c l av (at$ins'' `app` unA r))
+        LT → tBalanceL `app` (auth$ Bin c (at$ins'' `app` unA l) av r)
+        GT → tBalanceR `app` (auth$Bin c l av (at$ins'' `app` unA r))
   black (Bin _ l a r) = auth$ Bin B l a r
 
+
+  
+{- 4. The complexity increase from "lookup" to "insert" is roughly the same as
+  as the increase from "insert" to "delete". We need to define two wrappers for
+  the balancing operation that perform further more operations.
+-}
+  
+tUnbalancedL ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree :* BaseT Bool)
+tUnbalancedL = lamA tUnbalancedL'
+tUnbalancedL' t@(Bin c l a r) = lamA bal' `app` unA l where
+  bal' (Bin B l' a' r') = tBalanceL `app` (auth$Bin B (at.auth$Bin R l' a' r') a r) ** unit (c == B)
+  bal' (Bin R l' a' r') = (auth$Bin B l' a' (at$tBalanceL `app` (auth$Bin B (at$lamA red `app` unA r') a r))) ** unit False where
+  red (Bin _ l a r) = auth$ Bin R l a r
+  
+tUnbalancedR ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree :* BaseT Bool)
+tUnbalancedR = lamA tUnbalancedR'
+tUnbalancedR' t@(Bin c l a r) = lamA bal' `app` unA r where
+  bal' (Bin B l' a' r') = tBalanceR `app` (auth$Bin B l a (at.auth$Bin R l' a' r')) ** unit (c == B)
+  bal' (Bin R l' a' r') = (auth$Bin B (at$tBalanceR `app` (auth$Bin B l a (at$lamA red `app` unA l'))) a' r') ** unit False where
+  red (Bin _ l a r) = auth$ Bin R l a r
+  
 tDelete ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ Auth Tree :→ Auth Tree)
 tDelete = lamU del where
-  del ∷ (EDSL term, AuthDSL ExprF term) ⇒ A → term (Auth Tree :→ Auth Tree)
   del a = lamA black `o` tFst `o` lamA del' where
-    del' ∷ (EDSL term, AuthDSL ExprF term) ⇒
-      ExprF (ATerm term ExprF) Tree → term (Auth Tree :* BaseT (Bool, Maybe A))
     del' Tip = error "delete called on empty tree"
     del' (Bin _ _ (a',Just _) _) = if a == a' then auth Tip ** unit (True, Nothing)
                                    else error ("delete: element not found: " ++ show a)
@@ -140,7 +169,7 @@ tDelete = lamU del where
       del'' ldm = tif (lamA empty `app` tfst ldm)
                   (unA r ** unit (c == B, Nothing))
                   (lamU del''' `app` tsnd ldm) where
-        del''' (True, m) = withM Nothing $ lamA tUnbalancedR `app` t m
+        del''' (True, m) = withM Nothing $ tUnbalancedR `app` t m
         del''' (False,  m) = t m ** unit(False, Nothing)
         t (Just m) | a == a' = auth$Bin c (at$tfst ldm) (m, Nothing) r
         t _ | a == a' = error "failed assertion: m is not None"
@@ -151,7 +180,7 @@ tDelete = lamU del where
       del'' rdm = tif (lamA empty `app` tfst rdm)
                   (unA l ** unit (c == B, Just a'))
                   (lamU del''' `app` tsnd rdm) where
-        del''' (True, m) = withM m $ lamA tUnbalancedL `app` t
+        del''' (True, m) = withM m $ tUnbalancedL `app` t
         del''' (False,  m) = t ** unit(False, m)
         t = auth$Bin c l (a',Nothing) (at$tfst rdm)
 
@@ -161,40 +190,93 @@ tDelete = lamU del where
   black (Bin _ l a r) = auth$ Bin B l a r
   black Tip = auth$ Tip
 
--- Examples
 
-ins' a t = tInsert `app` unit a `app` unit [a] `app` t
+
+
+-- 5. Examples
+
+ins a = tInsert `app` unit a `app` unit a
+ins' a t = tInsert `app` unit a `app` unit a `app` t
 del' a t = tDelete `app` unit a `app` t
 
-t0 = unISem' $ ins' 'a' $ ins' 'b' $ ins' 'c' $ ins' 'd' tTip
-        
-test1 = fst . runProver . asP $ tInsert `app` unit 'a' `app` unit "a" `app` tTip
+t0 = unISem' $ ins' "a" $ ins' "b" $ ins' "c" $ ins' "d" tTip
 
-asP ∷ MSem' ExprF (HFix (Annot ExprF)) (Prover ExprF) a → Prover ExprF (MSem ExprF (HFix (Annot ExprF)) (Prover ExprF) a)
-asP = unMSem'
-
-asV ∷ MSem' ExprF (K D) (Verifier ExprF) a → Verifier ExprF (MSem ExprF (K D) (Verifier ExprF) a)
-asV = unMSem'
-
-asIO ∷ MSem' ExprF (HFix ExprF) IO a → IO (MSem ExprF (HFix ExprF) IO a)
-asIO = unMSem'
-
-main = do
-  mapM_ print . snd . runProver $ (asP $ tLookup `app` unit 'a') `shapp` (annotate t0)
-  mapM_ print . snd . runProver $ (asP $ tLookup `app` unit 'c') `shapp` (annotate t0)
-  p <- return . snd . runProver $ (asP $ tLookup `app` unit 'a') `shapp` (annotate t0)
-  print . runVerifier p $ (asV $ tLookup `app` unit 'a') `shapp` (hcata hhash t0)
-  print . runVerifier p $ (asV $ tLookup `app` unit 'c') `shapp` (hcata hhash t0)
+-- Check serialization isomorphism
+fromRight (Right a) = a
+t0check = fromRight . runGet get . runPut $ put t0 :: HFix ExprF Tree
 
 
+
+
+{- Here is all of the boiler plate that *should* be derived generically, especially
+   if I switch to "Multirec"
+ -}
+
+{- It's necessary to ensure that "put" and "get" form an isomorphism -}
+
+--instance (HFunctor f, Serialize (f (K ()) a)) ⇒ Serialize (HFix f a) where
+instance Serialize (HFix ExprF a) where
+  put (HFix t) = do
+    put $ hfmap (const (K ())) t
+    hmapM (\x -> put x >> return x) t
+    return ()
+  get = get >>= g where
+    g :: ExprF (K ()) a -> Get (HFix ExprF a)
+    g t = hmapM (const get) t >>= return . HFix
+
+instance Serialize Col where
+  put R = putWord8 0
+  put B = putWord8 1
+  get = getWord8 >>= return . g where
+    g 0 = R
+    g 1 = B
+    
+-- id = runGet . get . runPut . put
+
+instance Show Tree
+instance Show Chain
+deriving instance Show Col
+deriving instance Eq Col
+deriving instance (Show (r Tree), Show (r Chain)) ⇒ Show (ExprF r a)
+
+instance (Serialize (r Tree), Serialize (r Chain)) ⇒ Serialize (ExprF r a) where
+  put Tip = putWord8 0
+  put (Bin c l a r) = put c >> put l >> put a >> put r
+  get = getWord8 >>= g where
+    g 0 = return . unsafeCoerce $ Tip
+    g 1 = do
+      c <- get
+      l <- get ∷ Get (r Tree)
+      a <- get
+      r <- get ∷ Get (r Tree)
+      return . unsafeCoerce $ (Bin c l a r)
+
+-- Serialization
+instance Show (Some (HFix ExprF)) where show = some show
+instance Show (Some (ExprF (K D))) where show = some show
+instance Read (Some (ExprF (K D))) where readsPrec = readsPrec
+instance Serialize (Some (ExprF (K D))) where
+  put = some put
+  get = get >>= return . Some
+
+
+-- HFunctor (like in multirec)
+instance HFunctor ExprF where
+  hfmap f Tip = Tip
+  hfmap f (Bin c l a r) = Bin c (f l) a (f r)
+  htraverse f Tip = pure Tip
+  htraverse f (Bin c l a r) = Bin <$> pure c <*> (f l) <*> pure a <*> (f r)
+
+
+-- Somewhat general purpose graph library
 rbpToRose :: HFix ExprF Tree → Rose Node
 rbpToRose = unK . hcata alg where
   alg :: ExprF (K (Rose Node)) :~> K (Rose Node)
   alg Tip                 = K $ leaf Point
   alg (Bin c (K l) a (K r)) = K $ Branch (Node (col c) (shw a)) [l, r]
     where
-      shw (a, Nothing) = show a
-      shw (a, Just v) = show a ++ ":" ++ v
+      shw (a, Nothing) = a
+      shw (a, Just v) = a ++ ":" ++ v
       col B = "black"
       col R = "red"
 
@@ -207,39 +289,4 @@ rbpToRose' = unK . hfst . hcata ((alg . hfst &&&& hsnd) . unAnn) where
   alg Tip = K $ leaf Point
   alg (Bin (K l :*: K l') a (K r :*: K r')) = 
     K $ Branch (Node "black" (printf "%0x || %c || %x" (mod l' 65536) a (mod r' 65536))) [l, r]
--}
-
-shuffle :: [a] -> IO [a]
-shuffle xs = do
-  ar <- newArray n xs
-  forM [1..n] $ \i -> do
-    j <- randomRIO (i,n)
-    vi <- readArray ar i
-    vj <- readArray ar j
-    writeArray ar j vi
-    return vj
-  where
-    n = length xs
-    newArray :: Int -> [a] -> IO (IOArray Int a)
-    newArray n xs =  newListArray (1,n) xs
-
-t00 = unISem' $ ins' 'B' $ ins' 'C' $ ins' 'D' $ ins' 'A' $ ins' 'E' $ ins' 'F' $ tTip
-
-main'' :: IO (HFix ExprF Tree)
-main'' = do
-  x <- shuffle ['A'..'Z']
- -- asIO $ foldr ins' tTip x
-  y <- return $! unISem' $ foldr ins' tTip x
-  tree2png "test.png" $ rbpToRose y
-  x <- shuffle ['A'..'Z']
-  y' <- return $! unISem' $ foldr del' (ISem' y) x
-  tree2png "test1.png" $ rbpToRose y'
-  return y'
-  
-  {-
-main' :: IO ()
-main' = do
-  putStrLn $ show $ testTree
-  putStrLn $ show $ tt1
-  --tree2png "test.png" tt1
 -}

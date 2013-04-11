@@ -20,67 +20,10 @@ import Data.Hashable
 import Unsafe.Coerce
 import Data.Hashable
 import Prelude hiding ((**))
-
-{- Higher order functors
-   from http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
--}
-
-newtype HFix h a = HFix { unHFix ∷ h (HFix h) a }
-instance (Show (h (HFix h) a)) => Show (HFix h a) where
-  show = parens . show . unHFix where
-    parens x = "(" ++ x ++ ")"
-
--- Natural transformation
-type f :~> g = forall a. f a → g a
-
--- Higher order functor
-class HFunctor (h ∷ (* → *) → * → *) where
-    hfmap ∷ (f :~> g) → h f :~> h g
-
--- HTraversable
-class HFunctor h => HTraversable h where
-    htraverse :: Applicative f => (forall ix. a ix -> f (b ix)) -> (forall ix. h a ix -> f (h b ix))
-    hmapM :: Monad m => (forall ix. a ix -> m (b ix)) -> (forall ix. h a ix -> m (h b ix))
-    hmapM f = unwrapMonad . htraverse (WrapMonad . f)
---    sequence :: Monad m => forall ix. undefined -> m (h a ix)
---    sequence = hmapM id
-
--- | The product of functors
-data (f :*: g) a = (:*:) { hfst ∷ f a, hsnd ∷ g a } deriving (Show, Functor)
-infixr 6 :*:
-
--- | The higher-order analogue of (&&&) for functor products
-(&&&&) ∷ (f :~> g) → (f :~> g') → f :~> (g :*: g')
-(&&&&) u v x = u x :*: v x
-infixr 3 &&&&
-
-(/\) ∷ (f :~> g) → (f' :~> g') → (f :*: f') :~> (g :*: g')
-(/\) f g (a :*: b) = f a :*: g b
+import Data.Serialize (Serialize,put,get)
+import Data.ByteString (ByteString)
 
 
--- Higher order catamorphism
-hcata ∷ HFunctor h => (h f :~> f) → HFix h :~> f
-hcata alg = alg . hfmap (hcata alg) . unHFix
-
-hana ∷ HFunctor h => (f :~> h f) → f :~> HFix h
-hana coalg = HFix . hfmap (hana coalg) . coalg
-
-hpara ∷ HFunctor h => (h (f :*: HFix h) :~> f) → (HFix h :~> f)
-hpara psi = psi . hfmap (hpara psi &&&& id) . unHFix
-
--- Standard Functors
-newtype I x = I { unI ∷ x }
-newtype K x y = K { unK ∷ x }
-instance Show x => Show (I x) where show = show . unI
-instance Show x => Show (K x a) where show = show . unK
-                                      
-                                      
--- Natural over the index
-
-data Some f = forall a. Some (f a)
-
-some ∷ (forall a. f a → b) → Some f → b
-some f (Some x) = f x
 
 {- Abstract definition for hash functions -}
 
@@ -90,7 +33,9 @@ class HHashable (f ∷ (* → *) → * → *) where
   hhash ∷ f (K D) :~> (K D)
 
 data Annot (h ∷ (* → *) → * → *) r a = Ann { unAnn ∷ (h r :*: K D) a } deriving Show
-instance HFunctor h => HFunctor (Annot h) where hfmap f = Ann . (hfmap f /\ id) . unAnn
+instance HFunctor h => HFunctor (Annot h) where
+  hfmap f = Ann . (hfmap f /\ id) . unAnn
+  htraverse = undefined
 
 annotate ∷ (HFunctor f, HHashable f) => HFix f :~> HFix (Annot f)
 annotate = hana (Ann . (unHFix &&&& hcata hhash))
@@ -99,10 +44,7 @@ unannotate ∷ (HFunctor f, HHashable f) => HFix (Annot f) :~> HFix f
 unannotate = hana (hfst . unAnn . unHFix)
 
 
-
-{- Final encoding of an EDSL -}
-
-
+{- 1. Final encoding of an EDSL -}
 
 {- The base language (no authenticated types yet) -}
 
@@ -174,7 +116,9 @@ instance Monad m ⇒ EDSL (MSem' f d m) where
   tsnd a = MSem' $ unMSem' a >>= return . snd
   tif i t e = MSem' $ unMSem' i >>= \cond -> if cond then unMSem' t else undefined unMSem' e
 
-{- Language extended with authenticated types -}
+
+
+{- 2. Language extended with authenticated types -}
 
 class Monad m => Monadic f d m where
   construct ∷ f d a → m (d a)
@@ -198,7 +142,7 @@ instance HFunctor f ⇒ AuthDSL f ISem' where
 
 -- b. Denotation using Monadic m
 type instance MSem f d m (AuthT f a) = d a
-instance (HTraversable f, HFunctor f, Monadic f d m) ⇒ AuthDSL f (MSem' f d m) where
+instance (HFunctor f, Monadic f d m) ⇒ AuthDSL f (MSem' f d m) where
   auth a = MSem' $ hmapM (unMSem' . unA) a >>= construct
   lamA f = MSem' . return $ \x → x >>= destruct >>= unMSem' . f . hfmap (ATerm . MSem' . return)
 
@@ -235,15 +179,14 @@ instance (HHashable f, HFunctor f) ⇒ Monadic f (HFix f) (Prover f) where
 
 {- More efficient Prover (works on annotated trees) -}
 
-instance (HHashable f, HFunctor f) ⇒ Monadic f (HFix (Annot f)) (Prover f) where
+instance (HHashable f, HFunctor f, Serialize (Some (f (K D)))) ⇒ Monadic f (HFix (Annot f)) (Prover f) where
   construct = return . HFix . Ann . (id &&&& hhash . hfmap (hsnd . unAnn . unHFix)) where
   destruct (HFix (Ann (e :*: _))) = do
     tell [Some $ hfmap (hsnd . unAnn . unHFix) e]
     return e
 
-
 runProver ∷ Prover f a → (a, VO f)
-runProver = runWriter . unProver    
+runProver = runWriter . unProver
 
 
 {- Verifier -}
@@ -257,10 +200,10 @@ newtype Verifier f a = Verifier { unVerifier ∷ (ErrorT VerifierError (State (V
 instance (HHashable f) => Monadic f (K D) (Verifier f) where
   construct = return . hhash
   destruct (K d) = do
-    t':xs <- get
+    t':xs <- Control.Monad.State.get
     when (not $ some (unK . hhash) t' == d) $ throwError VerifierError
     t <- return $ some unsafeCoerce t'
-    put xs
+    Control.Monad.State.put xs
     return t
 
 runVerifier ∷ (HHashable f) => VO f → Verifier f a → Either VerifierError a
@@ -284,3 +227,66 @@ extractor prv vrf vo =
       vo' = snd . runProver $ prv -- (annotate t)
       collides (x,y) = hash x == hash y && not (x == y)
       hash = some (unK . hhash)
+
+
+
+
+
+{- Canonical Higher-order functors
+   from http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
+   but really based on Multirec, the generic programming library by Andres Löh
+-}
+
+newtype HFix h a = HFix { unHFix ∷ h (HFix h) a }
+instance (Show (h (HFix h) a)) => Show (HFix h a) where
+  show = parens . show . unHFix where
+    parens x = "(" ++ x ++ ")"
+
+-- Natural transformation
+type f :~> g = forall a. f a → g a
+
+-- Higher order functor
+class HFunctor (h ∷ (* → *) → * → *) where
+    hfmap ∷ (f :~> g) → h f :~> h g
+    hmapM :: Monad m => (forall ix. a ix -> m (b ix)) -> (forall ix. h a ix -> m (h b ix))
+    hmapM f = unwrapMonad . htraverse (WrapMonad . f)
+    htraverse :: Applicative f => (forall ix. a ix -> f (b ix)) -> (forall ix. h a ix -> f (h b ix))
+
+-- | The product of functors
+data (f :*: g) a = (:*:) { hfst ∷ f a, hsnd ∷ g a } deriving (Show, Functor)
+infixr 6 :*:
+
+-- | The higher-order analogue of (&&&) for functor products
+(&&&&) ∷ (f :~> g) → (f :~> g') → f :~> (g :*: g')
+(&&&&) u v x = u x :*: v x
+infixr 3 &&&&
+
+(/\) ∷ (f :~> g) → (f' :~> g') → (f :*: f') :~> (g :*: g')
+(/\) f g (a :*: b) = f a :*: g b
+
+
+-- Higher order catamorphism
+hcata ∷ HFunctor h => (h f :~> f) → HFix h :~> f
+hcata alg = alg . hfmap (hcata alg) . unHFix
+
+hana ∷ HFunctor h => (f :~> h f) → f :~> HFix h
+hana coalg = HFix . hfmap (hana coalg) . coalg
+
+hpara ∷ HFunctor h => (h (f :*: HFix h) :~> f) → (HFix h :~> f)
+hpara psi = psi . hfmap (hpara psi &&&& id) . unHFix
+
+-- Standard Functors
+newtype I x = I { unI ∷ x }
+newtype K x y = K { unK ∷ x }
+instance Show x => Show (I x) where show = show . unI
+instance Show x => Show (K x a) where show = show . unK
+instance Serialize x ⇒ Serialize (K x a) where
+  put = Data.Serialize.put . unK
+  get = Data.Serialize.get >>= return . K
+                                      
+-- Natural over the index
+
+data Some f = forall a. Some (f a)
+
+some ∷ (forall a. f a → b) → Some f → b
+some f (Some x) = f x
