@@ -1,7 +1,7 @@
 {-# LANGUAGE 
   GADTs, FlexibleInstances, FlexibleContexts,
   StandaloneDeriving, TypeOperators, UndecidableInstances,
-  MultiParamTypeClasses, DeriveFunctor,
+  MultiParamTypeClasses, DeriveFunctor, Rank2Types,
   GeneralizedNewtypeDeriving, ScopedTypeVariables, UnicodeSyntax,
   DeriveGeneric, TypeFamilies, ConstraintKinds
  #-}
@@ -42,27 +42,7 @@ data ExprF ∷ (* → *) → * → * where
   Cons :: r Tree → r Chain → ExprF r Chain
 
 type Auth a = AuthT ExprF a
-
-instance Hashable Col where
-  hash R = hash "R"
-  hash B = hash "B"
-
-instance HHashable ExprF where
-  hhash Tip = K $ hash "Tip"
-  hhash (Bin c (K l) a (K r)) = K $ hash ("Bin", c, l, a, r)
-  hhash Nil = K $ hash "Nil"
-  hhash (Cons (K x) (K xs)) = K $ hash ("Cons", x, xs)
-  
-type Prv a = Prover ExprF (MSem ExprF (HFix (Annot ExprF)) (Prover ExprF) a)
-asP ∷ MSem' ExprF (HFix (Annot ExprF)) (Prover ExprF) a → Prv a
-asP = unMSem'
-
-type Vrf a = Verifier ExprF (MSem ExprF (K D) (Verifier ExprF) a)
-asV ∷ MSem' ExprF (K D) (Verifier ExprF) a → Vrf a
-asV = unMSem'
-
-asIO ∷ MSem' ExprF (HFix ExprF) IO a → IO (MSem ExprF (HFix ExprF) IO a)
-asIO = unMSem'
+type Term a = (EDSL term, AuthDSL ExprF term) => term a
 
 
 {-
@@ -70,15 +50,14 @@ asIO = unMSem'
  -}
 
 -- 1. In-term tree constructors
-tTip ∷ (EDSL term, AuthDSL ExprF term) => term (Auth Tree)
+tTip ∷ Term (Auth Tree)
 tTip = auth Tip
 
-tBin ∷ (EDSL term, AuthDSL ExprF term) => 
-  term (BaseT Col :→ Auth Tree :→ BaseT (A,Maybe V) :→ Auth Tree :→ Auth Tree)
+tBin ∷ Term (Base Col :→ Auth Tree :→ Base (A,Maybe V) :→ Auth Tree :→ Auth Tree)
 tBin = lamU$ \c -> lam$ \l -> lamU$ \a -> lam$ \r -> auth (Bin c (at l) a (at r))
 
 -- 2. Lookup function O(log N)
-tLookup ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ Auth Tree :→ BaseT (Maybe V))
+tLookup ∷ Term (Base A :→ Auth Tree :→ Base (Maybe V))
 tLookup = lamU look where
   look a = look'' where
     look'' = lamA look' where
@@ -99,7 +78,7 @@ tLookup = lamU look where
    compile pattern matches for me.
 -}
 
-tBalanceL ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree)
+tBalanceL ∷ Term (Auth Tree :→ Auth Tree)
 tBalanceL = lamA$ tBalanceL'
 tBalanceL' t@(Bin B l a r) = lamA bal' `app` unA l where
   bal' (Bin R l' a' r') = lamA bal'' `app` unA l' where
@@ -110,7 +89,7 @@ tBalanceL' t@(Bin B l a r) = lamA bal' `app` unA l where
   bal' _ = auth t
 tBalanceL' t = auth t
 
-tBalanceR ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree)
+tBalanceR ∷ Term (Auth Tree :→ Auth Tree)
 tBalanceR = lamA$ tBalanceR' 
 tBalanceR' t@(Bin B l a r) = lamA bal' `app` unA r where
   bal' (Bin R l' a' r') = lamA bal'' `app` unA l' where
@@ -121,7 +100,7 @@ tBalanceR' t@(Bin B l a r) = lamA bal' `app` unA r where
   bal' _ = auth t
 tBalanceR' t = auth t
 
-tInsert ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ BaseT V :→ Auth Tree :→ Auth Tree)
+tInsert ∷ Term (Base A :→ Base V :→ Auth Tree :→ Auth Tree)
 tInsert = lamU$ \a → lamU$ \v → ins a v where
   ins a v = lamA black `o` ins'' where
     ins'' = lamA ins' where
@@ -143,21 +122,21 @@ tInsert = lamU$ \a → lamU$ \v → ins a v where
   the balancing operation that perform further more operations.
 -}
   
-tUnbalancedL ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree :* BaseT Bool)
+tUnbalancedL ∷ Term (Auth Tree :→ Auth Tree :* Base Bool)
 tUnbalancedL = lamA tUnbalancedL'
 tUnbalancedL' t@(Bin c l a r) = lamA bal' `app` unA l where
   bal' (Bin B l' a' r') = tBalanceL `app` (auth$Bin B (at.auth$Bin R l' a' r') a r) ** unit (c == B)
   bal' (Bin R l' a' r') = (auth$Bin B l' a' (at$tBalanceL `app` (auth$Bin B (at$lamA red `app` unA r') a r))) ** unit False where
   red (Bin _ l a r) = auth$ Bin R l a r
   
-tUnbalancedR ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (Auth Tree :→ Auth Tree :* BaseT Bool)
+tUnbalancedR ∷ Term (Auth Tree :→ Auth Tree :* Base Bool)
 tUnbalancedR = lamA tUnbalancedR'
 tUnbalancedR' t@(Bin c l a r) = lamA bal' `app` unA r where
   bal' (Bin B l' a' r') = tBalanceR `app` (auth$Bin B l a (at.auth$Bin R l' a' r')) ** unit (c == B)
   bal' (Bin R l' a' r') = (auth$Bin B (at$tBalanceR `app` (auth$Bin B l a (at$lamA red `app` unA l'))) a' r') ** unit False where
   red (Bin _ l a r) = auth$ Bin R l a r
   
-tDelete ∷ (EDSL term, AuthDSL ExprF term) ⇒ term (BaseT A :→ Auth Tree :→ Auth Tree)
+tDelete ∷ Term (Base A :→ Auth Tree :→ Auth Tree)
 tDelete = lamU del where
   del a = lamA black `o` tFst `o` lamA del' where
     del' Tip = error "delete called on empty tree"
@@ -230,7 +209,7 @@ instance Serialize Col where
   get = getWord8 >>= return . g where
     g 0 = R
     g 1 = B
-    
+
 -- id = runGet . get . runPut . put
 
 instance Show Tree
@@ -241,7 +220,10 @@ deriving instance (Show (r Tree), Show (r Chain)) ⇒ Show (ExprF r a)
 
 instance (Serialize (r Tree), Serialize (r Chain)) ⇒ Serialize (ExprF r a) where
   put Tip = putWord8 0
-  put (Bin c l a r) = put c >> put l >> put a >> put r
+  put (Bin c l a r) = putWord8 1 >> put c >> put l >> put a >> put r
+  put Nil = putWord8 0
+  put (Cons x xs) = putWord8 1 >> put x >> put xs
+  -- get fails for Chain?
   get = getWord8 >>= g where
     g 0 = return . unsafeCoerce $ Tip
     g 1 = do
@@ -254,10 +236,34 @@ instance (Serialize (r Tree), Serialize (r Chain)) ⇒ Serialize (ExprF r a) whe
 -- Serialization
 instance Show (Some (HFix ExprF)) where show = some show
 instance Show (Some (ExprF (K D))) where show = some show
+instance Eq (Some (ExprF (K D))) where (==) = (==)
 instance Read (Some (ExprF (K D))) where readsPrec = readsPrec
 instance Serialize (Some (ExprF (K D))) where
   put = some put
   get = get >>= return . Some
+
+-- Hashing
+instance Hashable Col where
+  hash R = hash "R"
+  hash B = hash "B"
+
+instance HHashable ExprF where
+  hhash Tip = K $ hash "Tip"
+  hhash (Bin c (K l) a (K r)) = K $ hash ("Bin", c, l, a, r)
+  hhash Nil = K $ hash "Nil"
+  hhash (Cons (K x) (K xs)) = K $ hash ("Cons", x, xs)
+
+
+-- Convenience functions for common denotations
+asP ∷ MSem' ExprF (HFix (Annot ExprF)) (Prover ExprF) a → Prv ExprF a
+asP = unMSem'
+
+asV ∷ MSem' ExprF (K D) (Verifier ExprF) a → Vrf ExprF a
+asV = unMSem'
+
+asIO ∷ MSem' ExprF (HFix ExprF) IO a → IO (MSem ExprF (HFix ExprF) IO a)
+asIO = unMSem'
+
 
 
 -- HFunctor (like in multirec)

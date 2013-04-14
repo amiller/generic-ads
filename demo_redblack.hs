@@ -1,5 +1,6 @@
 {-# LANGUAGE 
-  GADTs, NoMonomorphismRestriction, FlexibleContexts
+  GADTs, NoMonomorphismRestriction, FlexibleContexts, UnicodeSyntax,
+  ScopedTypeVariables
  #-}
 
 module Main where
@@ -12,6 +13,9 @@ import Data.Serialize
 import Data.IORef
 import System.Random
 import Data.Array.IO
+
+import qualified Data.ByteString as BS
+import System.IO
 
 -- Examples
 main''' = do
@@ -40,13 +44,29 @@ shuffle xs = do
     newArray :: Int -> [a] -> IO (IOArray Int a)
     newArray n xs =  newListArray (1,n) xs
 
-t00' :: (EDSL term, AuthDSL ExprF term) => term (Auth Tree)
+t00' :: Term (Auth Tree)
 t00' = ins' "B" $ ins' "C" $ ins' "D" $ ins' "A" $ ins' "E" $ ins' "F" $ tTip
 t00 = unISem' t00'
 
-proof = map (runPut . Data.Serialize.put) . snd . runProver $ (asP $ ins "x") `shapp` (annotate t00)
-voof = map (fromRight . runGet Data.Serialize.get) proof :: VO ExprF
+proof = runPut . put . snd . runProver $ (asP $ ins "x") `shapp` (annotate t00)
+voof = fromRight . runGet Data.Serialize.get $ proof :: VO ExprF
 vrf = runVerifier voof $ (asV $ ins "x") `shapp` (hcata hhash t00)
+
+write' = write $ (asP $ ins "d") `shapp` (annotate t00)
+load' = load $ (asV $ ins "d") `shapp` (hcata hhash t00)
+  
+write :: Prv ExprF (Auth Tree) → IO ()
+write prf = do
+  withBinaryFile "proof.bin" WriteMode $ \h -> do
+    BS.hPutStr h . runPut . Data.Serialize.put . snd . runProver $ prf
+
+load :: Vrf ExprF (Auth Tree) → IO (Either VerifierError (VSem ExprF (Auth Tree)))
+--load :: Verifier ExprF (MSem ExprF (K D) (Verifier ExprF) a) → IO (Either VerifierError (MSem ExprF (K D) (Verifier ExprF) a))
+load vrf = do
+  withBinaryFile "proof.bin" ReadMode $ \h -> do
+    vob <- BS.hGetContents h
+    return (runVerifier (fromRight $ runGet get vob) vrf)
+                                      
 
 main'' = do
   setStdGen (mkStdGen seed)
@@ -69,3 +89,7 @@ main' = do
   putStrLn $ show $ tt1
   --tree2png "test.png" tt1
 -}
+
+m_start :: IO ()
+m_start = do
+  :

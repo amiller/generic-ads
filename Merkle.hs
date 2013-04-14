@@ -49,21 +49,21 @@ unannotate = hana (hfst . unAnn . unHFix)
 {- The base language (no authenticated types yet) -}
 
 -- Base Types
-newtype BaseT a = BaseT { unBase ∷ a }
+newtype Base a = Base { unBase ∷ a }
 data a :* b
 data a :→ b
 infixr 5 :→
   
 -- Base term language
 class EDSL term where
-  unit ∷ a → term (BaseT a)
-  lamU ∷ (a → term b) → term (BaseT a :→ b)
+  unit ∷ a → term (Base a)
+  lamU ∷ (a → term b) → term (Base a :→ b)
   lam  ∷ (term a → term b) → term (a :→ b)
   app  ∷ term (a :→ b) → term a → term b
   (**) ∷ term a → term b → term (a :* b)
   tfst ∷ term (a :* b) → term a
   tsnd ∷ term (a :* b) → term b
-  tif  ∷ term (BaseT Bool) → term a → term a → term a
+  tif  ∷ term (Base Bool) → term a → term a → term a
 
 f `o` g = lam$ \x -> f `app` (g `app` x)
 
@@ -76,12 +76,12 @@ tFst = lam tfst
 tSnd ∷ EDSL term => term (a :* b :→ b)
 tSnd = lam tsnd
 
-tIf  ∷ EDSL term => term (BaseT Bool :→ a :→ a :→ a)
+tIf  ∷ EDSL term => term (Base Bool :→ a :→ a :→ a)
 tIf = lam$ \cond -> lam$ \then' -> lam$ \else' -> tif cond then' else'
 
 -- a. Example denotation (for direct)
 type family ISem a ∷ *
-type instance ISem (BaseT a) = a
+type instance ISem (Base a) = a
 type instance ISem (a :→ b) = ISem a → ISem b
 type instance ISem (a :* b) = (ISem a, ISem b)
 newtype ISem' a = ISem' {unISem' :: ISem a}
@@ -98,7 +98,7 @@ instance EDSL ISem' where
 
 -- b. Monadic denotation
 type family MSem (f ∷ (* → *) → * → *) (d ∷ * → *) (m ∷ * → *) a ∷ *
-type instance MSem f d m (BaseT a) = a
+type instance MSem f d m (Base a) = a
 type instance MSem f d m (a :→ b) = m (MSem f d m a) → m (MSem f d m b)
 type instance MSem f d m (a :* b) = (MSem f d m a, MSem f d m b)
 newtype MSem' f d m a = MSem' { unMSem' :: m (MSem f d m a) }
@@ -166,6 +166,7 @@ instance (HFunctor f, Show (Some (HFix f))) => Monadic f (HFix f) IO where
 type VO f = [Some (f (K D))]
 type Collision f = (Some (f (K D)), Some (f (K D)))
 
+type Prv f a = Prover f (MSem f (HFix (Annot f)) (Prover f) a)
 newtype Prover f a = Prover { unProver ∷ Writer (VO f) a }
                 deriving (Monad, MonadWriter (VO f))
 
@@ -196,6 +197,8 @@ instance Error VerifierError where strMsg _ = VerifierError
   
 newtype Verifier f a = Verifier { unVerifier ∷ (ErrorT VerifierError (State (VO f))) a }
                        deriving (Monad, MonadError VerifierError, MonadState (VO f))
+type VSem f a = MSem f (K D) (Verifier f) a
+type Vrf f a = Verifier f (VSem f a)
 
 instance (HHashable f) => Monadic f (K D) (Verifier f) where
   construct = return . hhash
@@ -217,14 +220,14 @@ shapp :: Monad m ⇒ m (m a → m b) → a → m b
 shapp f = join . ap f . return . return
 
 extractor ∷ (Eq (Some (f (K D))), HFunctor f, HHashable f) => 
-  Prover f a → Verifier f a → VO f → Either (Collision f) a
+  Prv f a → Vrf f a → VO f → Either (Collision f) (VSem f a)
 extractor prv vrf vo =
   case find collides (zip vo vo') of
     Just collision → Left collision
     Nothing → Right result where
-      Right result = runVerifier vo vrf -- (hcata hhash t) f
+      Right result = runVerifier vo' vrf
     where
-      vo' = snd . runProver $ prv -- (annotate t)
+      vo' = snd . runProver $ prv
       collides (x,y) = hash x == hash y && not (x == y)
       hash = some (unK . hhash)
 

@@ -6,5 +6,9 @@ cabal-dev
 *.chs.h
 .virthualenv
 *flymake*
-*#
+*#*
 *~
+*.agdai
+*.png
+agda
+old
