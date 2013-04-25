@@ -1,0 +1,250 @@
+% THIS IS SIGPROC-SP.TEX - VERSION 3.1
+% WORKS WITH V3.2SP OF ACM_PROC_ARTICLE-SP.CLS
+% APRIL 2009
+%
+% It is an example file showing how to use the 'acm_proc_article-sp.cls' V3.2SP
+% LaTeX2e document class file for Conference Proceedings submissions.
+% ----------------------------------------------------------------------------------------------------------------
+% This .tex file (and associated .cls V3.2SP) *DOES NOT* produce:
+%       1) The Permission Statement
+%       2) The Conference (location) Info information
+%       3) The Copyright Line with ACM data
+%       4) Page numbering
+% ---------------------------------------------------------------------------------------------------------------
+% It is an example which *does* use the .bib file (from which the .bbl file
+% is produced).
+% REMEMBER HOWEVER: After having produced the .bbl file,
+% and prior to final submission,
+% you need to 'insert'  your .bbl file into your source .tex file so as to provide
+% ONE 'self-contained' source file.
+%
+% Questions regarding SIGS should be sent to
+% Adrienne Griscti ---> griscti@acm.org
+%
+% Questions/suggestions regarding the guidelines, .tex and .cls files, etc. to
+% Gerald Murray ---> murray@hq.acm.org
+%
+% For tracking purposes - this is V3.1SP - APRIL 2009
+
+\documentclass{acm_proc_article-sp}
+\usepackage[mathletters]{ucs}
+\usepackage{stmaryrd}
+\usepackage[utf8x]{inputenc}
+\DeclareUnicodeCharacter {10214}{\llbracket }
+\DeclareUnicodeCharacter {10215}{\rrbracket }
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{theorem}
+\usepackage{framed}
+\usepackage{subfigure}
+\newdef{definition}{Definition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
+
+\newcommand{\tn}{\textnormal}
+
+\begin{document}
+
+\newdef{example}{Example}
+\lstset{language=Haskell}
+
+\title{
+  Authenticated Data Structures, Generically
+}
+
+\numberofauthors{4}
+\author{
+\alignauthor
+Andrew Miller\\
+       \affaddr{Computer Science Department}\\
+       \affaddr{University of Maryland}\\
+       \email{amiller@cs.umd.edu}
+}
+\maketitle
+\begin{abstract}
+\end{abstract}
+
+% A category with the (minimum) three required fields
+%\category{H.4}{Information Systems Applications}{Miscellaneous}
+%A category including the fourth, optional field follows...
+%\category{D.2.8}{Software Engineering}{Metrics}[complexity measures, performance measures]
+
+%\terms{Security,Programming Languages,Cryptography}
+
+%\keywords{ACM proceedings, \LaTeX, text tagging} % NOT required for Proceedings
+
+\section{Introduction}
+
+Consider a client that wishes to run a {\em program} consisting of data structures and algorithms - for example, a {\em dictionary} implemented as a binary search tree with operations for {\em search}, {\em insert}, and {\em delete}. In the standard two-party model for secure outsourcing (e.g., outsourced databases, outsourced computation, authenticated data structures), the client reduces its resource requirements (storage and/or computation) by delegating them to an untrusted service provider. The security of such a scheme is expressed as a relation between the part of the protocol executed by the client (the {\em Verifier}), the part executed by the untrusted service provider (the {\em Prover}), and the hypothetical scenario where the client runs the entire original program (the {\em Ideal}). The security relation is twofold: informally, 1) that when both parties execute the protocol correctly, the client receives the same results as in the Ideal case (liveness); and 2) regardless of the behavior of the (possibly malicious) service provider, the client should not obtain the {\em wrong} result. The most common constructions are based on {\em collision-resistant hash functions}: the client stores only a concise representation (a {\em digest}) of the data, and the safety requirement is shown by reduction (of a successful 
+Adversary) to the problem finding a hash collision.
+
+There has been extensive previous work using this approach ~\cite{Papamanthou2008}; however, each new data structure and functionality has required a security definition to be written from scratch - similarly for constructions and proofs. We propose to improve this situation by using {\em type-directed generic programming} to uniformly define a large class of security relations and constructions. Our approach is the following: 1) we define a system of type codes for describing data structures and computations; 2) we define security relations denotational models of these types.
+
+We restrict our attention to Authenticated Data Structure constructions using only a collision-resistant hash function as a cryptographic primitive. Our scope can therefore be considered one of {\em generalized Merkle hash trees}. Future work will be to extend this generalization technique to utilize cryptographic accumulators.
+
+The main contributions of this work are
+\begin{enumerate}
+ \item (definitions) a generalized definition of {\em authenticated programs} based on a type system extended with {\em authenticated} data types, from which we can uniformly derive the security claims commonly found in ADS literature
+ \item (constructions) a term language for defining Ideal functionalities (i.e., protocol specification), along with denotational semantics (interpretations) in the form of two-party protocols such that the constructions provably satisfy the security claims.
+ \item (evaluation) an implementation as library/language for developing authenticated programs, and benchmarks resulting from case studies with realistic applications (e.g. Bitcoin ledger).
+\end{enumerate}
+
+The structure of the remaining paper is as follows: In Section 2, we introduce the core concept by defining a type system We show that the security definitions derived in our calculus coincide with the definitions given in the ADS literature. In particular, the $Refresh$, $Update$, $Verify$ algorithms from Authenticated Dictionaries are equivalent to specialized denotations of a dictionary specification. In Section \ref{sec:lang}, we present an abstract syntax sufficient for describing (inefficient) authenticated programs, as well as how to derive security claims from their types and prove the correctness of their interpretation by induction over the terms. . In Section \ref{sec:extended}, we show more practical (and efficient) by incorporating algebraic authenticated data types, generalizing the concept of a Merkle hash tree. The security claims and the structure of the proofs remain mostly unchanged. In Section 4, we describe an implementation of our system as a Haskell library for developing ADS protocols.
+
+\section{Types and Security for Authenticated Programs}
+
+In this section we define an inductive set of type codes, and semantics interpretations depending on these types.
+
+Requirements for the hash function:
+We treat the type of digest and hash primitive as parameter: we only know require its type, $h : Data → D$, and focus on showing that our constructions reduce security to finding a collision. <What to say about the computational hardness?>
+
+\begin{figure}
+\centering
+  τ  ::=  $\overline{σ}$ | σ | τ₁ ⇒ τ₂ \\
+\caption{Type system, where σ is a base type, $\overline{σ}$ is an authenticated base type, and τ₁ ⇒ τ₂ is an arrow representing a computation taking an input of type τ₁ and producing an output of type τ₂. }
+\label{fig:types}
+\end{figure}
+
+\subsection{Compatibility with Previous Work}
+
+In this section we show for several examples that the definitions we derive in our scheme are equivalent to those from ~\cite{98}
+
+\begin{example} The following are types of queries defined for a Binary Search Tree program that stores elements of type $A$. ``$\tn{Tree}$'' and ``$\displaystyle \overline{\tn{Tree}}$'' represent the base and authenticated type of trees, respectively.
+\[ ⊢ setup : \tn{Tree} ⇒ \overline{\tn{Tree}} \]
+\[ ⊢ member : A ⇒ \overline{\tn{Tree}} ⇒ \tn{Bool}  \]
+\[ ⊢ insert : A ⇒ \overline{\tn{Tree}} ⇒ \overline{\tn{Tree}} \]
+\[ ⊢ export  : \overline{\tn{Tree}} ⇒ \tn{Tree} \]
+\[ ⊢ merge  : \overline{\tn{Tree}} ⇒ \overline{\tn{Tree}} ⇒ \overline{\tn{Tree}} \]
+\end{example}
+
+\begin{example}
+\begin{equation*}
+\displaystyle {{ ⊢ member : A ⇒ \overline{\tn{Tree}} ⇒ \tn{Bool} } \over {}}
+\end{equation*}
+\[ ⟦ A ⇒ \overline{\tn{Tree}} ⇒ \tn{Bool} ⟧ \sim A → \tn{Tree} → \tn{Bool}  \] 
+\[ ⟦ A ⇒ \overline{\tn{Tree}} ⇒ \tn{Bool} ⟧_{P} \sim A → \tn{Tree} → (\tn{Bool} × \tn{Tree}) \]
+\[ ⟦ A ⇒ \overline{\tn{Tree}} ⇒ \tn{Bool} ⟧_{V} \sim A → D → \tn{Tree} → \tn{Bool} \]
+
+
+We read these types as follows: $setup(tree)$ takes an ordinary (non-authenticated) tree and creates an authenticated version of it.
+\end{example}
+
+
+\begin{figure*}
+\centering
+
+   \framebox[1.1\width]{ $ (T\alpha, η\alpha, \alpha^⋆, ⟦α⟧) $ } \\
+   \qquad \\
+
+   $ T_I \alpha = \alpha \qquad
+   ⟦ \overline{σ} ⟧_I  = T_I σ \qquad
+   ⟦ σ ⟧_I = T_I σ \qquad
+   ⟦ τ₁ ⇒ τ₂ ⟧_I = T_I(⟦τ₁⟧_I → T_I ⟦τ₂⟧_I) $ \\
+
+   \qquad \\
+
+    $ T_P α = \mathcal{VO} × α \qquad
+   ⟦ \overline{σ} ⟧_P  = T_P σ  \qquad
+   ⟦σ⟧_P = T_P σ  \qquad  
+   ⟦ τ₁ ⇒ τ₂ ⟧_P = T_P ( ⟦τ₁⟧_P → T_P ⟦ τ₂ ⟧_P )$ \\
+   $       
+   η_P a = ([], a) \qquad
+   f^⋆_P(vo,a) = (vo',b) ← fa; (vo++vo',b) \qquad $ \\
+
+
+   \qquad \\
+
+    $ T_V \alpha = \mathcal{VO} → ⊤ + \mathcal{VO} × \alpha \qquad
+    ⟦ \overline{σ} ⟧_V  = T_V D \qquad
+    ⟦ σ ⟧_V  = T_V σ  \qquad
+    ⟦ τ₁ ⇒ τ₂ ⟧_V = T_V (⟦ τ₁ ⟧_V → T_V ⟦ τ₂ ⟧_V) 
+    $ \\
+    $       η_V a = λvo.inj₂(vo, a) \qquad
+      f^⋆_V(vo,a) = (vo',b) ← fa; (vo++vo',b) \qquad
+    $
+
+   \qquad \\
+
+   \framebox[1.1\width]{ $ Rel_τ (V,I,P) $ } \qquad
+
+   \qquad \\
+
+   $ Correct_σ (v,c,(vo,c')) ⇔ c = c' ∧ v(vo) = inj₂ ([], c) \qquad $ \\
+   $ Sound_σ (v,c,p) ⇔ c = ∀ vo . (v(vo) = inj₂ ([], c)) ∨ (v(vo) = inj₁ ⊤) ∨ (∃ x ≠ y . h(x) = h(y)) $ \qquad
+
+   \qquad \\
+
+   $ Correct_{\overline{σ}} (v,c,(vo,c')) ⇔ c = c' ∧ v(vo) = inj₂ ([], h(c)) \qquad $ \\
+   $ Sound_{\overline{σ}} (v,c,p) ⇔ c = ∀ vo . (v(vo) = inj₂ ([], h(c))) ∨ (v(vo) = inj₁ ⊤) ∨ (∃ x ≠ y . h(x) = h(y)) $ \qquad
+
+   \qquad \\
+
+   $ Correct_{τ₁ ⇒ τ₂} (v,i,p) ⇔ ∀ v',i',p' . Correct_{τ₁} (v',i',p') → Correct_{τ₂} (v';v, i';i, p';p) $ \\
+   $ Sound_{τ₁ ⇒ τ₂} (v,i,p) ⇔ ∀ v',i',p' . Sound_{τ₁} (v',i',p') → Sound_{τ₂} (v';v, i';i, p';p) $ \\
+
+
+\caption{Three computational models: Ideal, Prover, and Verifier}
+\label{fig:models}
+\end{figure*}
+
+\section{Simple Language and Construction}
+
+\begin{figure}
+\begin{lstlisting}
+    data Term : ty -> Set where
+        Lam : (Term t1 -> Term t2)
+-> Term (t1 => t2)
+        App : (Term t1 -> Term t2) 
+-> Term t1 -> Term t2
+        Base : (base -> Term t) 
+-> Term (base => t)
+        Auth : (base -> Term t) 
+-> Term (auth => t)
+\end{lstlisting}
+\caption{A simple term language (using Higher Order Abstract Syntax~\cite{Pfenning1988}) for constructing authenticated programs.}
+\end{figure}
+
+
+%\begin{figure}
+%   \framebox[1.1\width]{ τ ::= $\overline{σ}$ | σ | τ₁ ⇒ τ₂ } \\ \qquad \\
+%\end{figure}
+
+%\begin{lstlisting}
+%    data AuthPackage = MkAuth
+%        { D           :: *
+%        , Data        :: *
+%        , h           :: Data -> D
+%        }
+%\end{lstlisting}
+
+\begin{theorem}
+For any term $t$, ...
+\proof
+By induction and parametricity...
+\end{theorem}
+
+\section{Extended to Algebraic Datatypes}
+
+Fixpoints and recursive datatypes.
+
+\section{Implementation of an Authenticated Programming Library}
+
+Our library consists of ...
+Deep embedding vs language
+
+\section{Related Work}
+History of authenticated data structures Merkle trees for digital signatures, Certificate revocation, Authenticated Data Structures and Outsourced Databases. General model for authenticated data structures.
+
+Advanced cryptographic methods - accumulators.
+
+\section{Conclusion}
+
+
+\bibliographystyle{abbrv}
+\bibliography{library}
+
+%\appendix
+
+\balancecolumns
+
+\end{document}
