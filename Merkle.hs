@@ -1,60 +1,89 @@
 {-# LANGUAGE 
   GADTs, FlexibleInstances, UndecidableInstances,
   StandaloneDeriving, TypeOperators, Rank2Types, RankNTypes,
-  MultiParamTypeClasses, DeriveFunctor, KindSignatures,
+  MultiParamTypeClasses, DeriveFunctor, DeriveTraversable, KindSignatures,
   GeneralizedNewtypeDeriving, FlexibleContexts,
   TypeFamilies, UnicodeSyntax
  #-}
+
+{-
+Generic authenticated data structures
+Andrew Miller
+
+The typeclass/type-family based encoding of this language is
+based on the Finally Tagless paper [1]. The representation of
+datatypes using pattern functors is the same as in the Regular
+generics library [2].
+
+[1] Caretti, Kisleyov, et al. Finally Tagless, Partially Evaluated
+[2] A Lightweight Approach to Datatype-generic Rewriting
+
+-}
 
 module Merkle where
 
 import Control.Applicative hiding (some)
 import Control.Monad
-import Control.Monad.State
+import Control.Monad.Supply
+import Control.Monad.Supply.Class
 import Control.Monad.Writer
 import Control.Monad.Identity
 import Control.Monad.Error
 import Data.List
 import Data.Maybe
 import Data.Hashable
-import Unsafe.Coerce
-import Data.Hashable
+import Data.Traversable
 import Prelude hiding ((**))
-import Data.Serialize (Serialize,put,get)
+import Data.Binary (Binary,put,get)
 import Data.ByteString (ByteString)
-
-
+import Generics.Regular
 
 {- Abstract definition for hash functions -}
-
 type D = Int
+class HHashable f where
+  hhash ∷ f D → D
+  
+{- "Merkleized" annotated structure -}
+type Annot f = f :∘ (I :*: K D)
 
-class HHashable (f ∷ (* → *) → * → *) where
-  hhash ∷ f (K D) :~> (K D)
+annotate ∷ (Functor f, HHashable f) => Fix f → Fix (Annot f)
+annotate = ana (O . fmap (I &&& K . cata hhash) . out)
 
-data Annot (h ∷ (* → *) → * → *) r a = Ann { unAnn ∷ (h r :*: K D) a } deriving Show
-instance HFunctor h => HFunctor (Annot h) where
-  hfmap f = Ann . (hfmap f /\ id) . unAnn
-  htraverse = undefined
+unannotate ∷ (Functor f, HHashable f) => Fix (Annot f) → Fix f
+unannotate = ana (fmap (unI . hfst) . unO . out)
 
-annotate ∷ (HFunctor f, HHashable f) => HFix f :~> HFix (Annot f)
-annotate = hana (Ann . (unHFix &&&& hcata hhash))
+rootdigest ∷ (Functor f, HHashable f) ⇒ Fix f → D
+rootdigest = cata hhash
 
-unannotate ∷ (HFunctor f, HHashable f) => HFix (Annot f) :~> HFix f
-unannotate = hana (hfst . unAnn . unHFix)
+
+{- Functor composition -}
+newtype (f :∘ g) r = O { unO ∷ (f (g r)) } deriving (Show, Functor)
+
+{- Functor pair/product -}
+(f &&& g) x = f x :*: g x
+infixr 3 &&&
+
+(/\) ∷ (a → b) → (a' → b') → (a,a') → (b,b')
+(/\) f g (a, b) = (f a, g b)
+
+cata ∷ Functor f => (f a → a) → Fix f → a
+cata alg = alg . fmap (cata alg) . out
+
+ana ∷ Functor f => (a → f a) → a → Fix f
+ana coalg = In . fmap (ana coalg) . coalg
 
 
 {- 1. Final encoding of an EDSL -}
 
-{- The base language (no authenticated types yet) -}
+-- Type codes (phantom types)
+data Base a                 -- base (lifted)
+data a :* b                 -- pair
+data a :→ b                 -- function
+data AuthT (f ∷ * → *)      -- Authenticated types
 
--- Base Types
-newtype Base a = Base { unBase ∷ a }
-data a :* b
-data a :→ b
 infixr 5 :→
-  
--- Base term language
+
+-- Term language (except the authenticated types)
 class EDSL term where
   unit ∷ a → term (Base a)
   lamU ∷ (a → term b) → term (Base a :→ b)
@@ -65,48 +94,59 @@ class EDSL term where
   tsnd ∷ term (a :* b) → term b
   tif  ∷ term (Base Bool) → term a → term a → term a
 
-f `o` g = lam$ \x -> f `app` (g `app` x)
+-- Extended term language (with auth types)
+class AuthDSL f term where
+  auth ∷ f (term (AuthT f)) → term (AuthT f)
+  lamA ∷ (f (term (AuthT f)) → term b) → term (AuthT f :→ b)
 
-tPair ∷ EDSL term => term (a :→ b :→ a :* b)
-tPair = lam$ \a -> lam$ \b -> a ** b
 
-tFst ∷ EDSL term => term (a :* b :→ a)
-tFst = lam tfst
-
-tSnd ∷ EDSL term => term (a :* b :→ b)
-tSnd = lam tsnd
-
-tIf  ∷ EDSL term => term (Base Bool :→ a :→ a :→ a)
-tIf = lam$ \cond -> lam$ \then' -> lam$ \else' -> tif cond then' else'
-
--- a. Example denotation (for direct)
+-- a. (ISem) Example denotation without monads
 type family ISem a ∷ *
 type instance ISem (Base a) = a
 type instance ISem (a :→ b) = ISem a → ISem b
 type instance ISem (a :* b) = (ISem a, ISem b)
-newtype ISem' a = ISem' {unISem' :: ISem a}
+type instance ISem (AuthT f) = Fix f
+newtype ISem' a = ISem' { unISem' ∷ ISem a}
 
 instance EDSL ISem' where
   unit = ISem'
-  lamU f = ISem' $ unISem' . f
+  lamU f = ISem' (unISem' . f)
   lam f = ISem' $ unISem' . f . ISem'
   app f x = ISem' $ (unISem' f) (unISem' x)
   a ** b = ISem' $ (unISem' a , unISem' b)
   tfst = ISem' . fst . unISem'
   tsnd = ISem' . snd . unISem'
   tif i t e = if unISem' i then t else e
+  
+instance Functor f ⇒ AuthDSL f ISem' where
+  auth = ISem' . In . fmap (unISem')
+  lamA f = ISem' $ unISem' . f . fmap ISem' . out
 
--- b. Monadic denotation
-type family MSem (f ∷ (* → *) → * → *) (d ∷ * → *) (m ∷ * → *) a ∷ *
+
+-- b. AuthMonad denotation
+-- These semantics are parametric in the choice of an AuthMonad
+
+type family MSem (f ∷ * → *) d (m ∷ * → *) a ∷ *
+newtype MSem' f d m a = MSem' { unMSem' :: m (MSem f d m a) }
+
 type instance MSem f d m (Base a) = a
 type instance MSem f d m (a :→ b) = m (MSem f d m a) → m (MSem f d m b)
 type instance MSem f d m (a :* b) = (MSem f d m a, MSem f d m b)
-newtype MSem' f d m a = MSem' { unMSem' :: m (MSem f d m a) }
+type instance MSem f d m (AuthT f) = d
+
+class Monad m => AuthMonad f d m where
+  construct ∷ f d → m d
+  destruct  ∷   d → m (f d)
 
 instance Monad m ⇒ EDSL (MSem' f d m) where
   unit = MSem' . return
-  lamU f = MSem' . return $ (>>= unMSem' . f)
-  lam f = MSem' . return $ unMSem' . f . MSem'
+  lamU f = MSem' . return $ (\x → x >>= unMSem' . f)
+  
+  -- Call by name: repeats lots of computations! Inefficient for my example
+  -- lam f = MSem' . return $ unMSem' . f . MSem'   
+  -- Call by value: doesn't do that
+  lam f = MSem' $ return ((=<<) (unMSem' . f . MSem' . return))
+
   app f x = MSem' $ unMSem' f >>= ($ (unMSem' x))
   a ** b = MSem' $ do
     a' <- unMSem' a;
@@ -114,112 +154,89 @@ instance Monad m ⇒ EDSL (MSem' f d m) where
     return (a' , b')
   tfst a = MSem' $ unMSem' a >>= return . fst
   tsnd a = MSem' $ unMSem' a >>= return . snd
-  tif i t e = MSem' $ unMSem' i >>= \cond -> if cond then unMSem' t else undefined unMSem' e
+  tif i t e = MSem' $ unMSem' i >>= \cond -> if cond then unMSem' t else unMSem' e
+
+instance (Traversable f, Functor f, AuthMonad f d m) ⇒ AuthDSL f (MSem' f d m) where
+  auth a = MSem' $ Data.Traversable.mapM unMSem' a >>= construct
+  lamA f = MSem' . return $ \x → x >>= destruct >>= unMSem' . f . fmap (MSem' . return)
 
 
+{- Specialized instances of AuthMonad for Prover and Verifier -}
+{- The satisfaction of the security relation follows from:
+   a) morphisms between the Identity, Prover, and Verifier authmonads
+      - destruct and destruct satisfy the security relation
+      - return vacuously does
+      - bind preserves the relation
+   b) that the semantics are given parametrically in AuthMonad
+ -}
 
-{- 2. Language extended with authenticated types -}
+instance (Functor f) => AuthMonad f (Fix f) Identity where
+  construct = return . In
+  destruct = return . out
 
-class Monad m => Monadic f d m where
-  construct ∷ f d a → m (d a)
-  destruct  ∷   d a → m (f d a)
+hsnd (f :*: g) = g
+hfst (f :*: g) = f
 
--- Authenticated type extension
-newtype AuthT (f ∷ (* → *) → * → *) a = AuthT { unAuth ∷ a }
-newtype ATerm term (f ∷ (* → *) → * → *) a = ATerm { unA ∷ term (AuthT f a) }
-at = ATerm
+instance (HHashable f, Functor f) => AuthMonad f (Fix (Annot f)) Identity where
+  construct = return . In . O . fmap (I &&& K . hhash . fmap (unK . hsnd) . unO . out)
+  destruct (In (O e)) = return $ fmap (unI . hfst) e
 
--- Extended term language
-class AuthDSL f term where
-  auth ∷ f (ATerm term f) a → term (AuthT f a)
-  lamA ∷ (f (ATerm term f) a → term b) → term (AuthT f a :→ b)
-
--- a. Example (direct) denotation (using HFix)
-type instance ISem (AuthT f a) = HFix f a
-instance HFunctor f ⇒ AuthDSL f ISem' where
-  auth = ISem' . HFix . hfmap (unISem' . unA)
-  lamA f = ISem' $ unISem' . f . hfmap (ATerm . ISem') . unHFix
-
--- b. Denotation using Monadic m
-type instance MSem f d m (AuthT f a) = d a
-instance (HFunctor f, Monadic f d m) ⇒ AuthDSL f (MSem' f d m) where
-  auth a = MSem' $ hmapM (unMSem' . unA) a >>= construct
-  lamA f = MSem' . return $ \x → x >>= destruct >>= unMSem' . f . hfmap (ATerm . MSem' . return)
-
-
-{- Specialized instances for prover, verifier -}
-instance (HFunctor f) => Monadic f (HFix f) Identity where
-  construct = return . HFix
-  destruct = return . unHFix
-
-instance (HHashable f, HFunctor f) => Monadic f (HFix (Annot f)) Identity where
-  construct = return . HFix . Ann . (id &&&& hhash . hfmap (hsnd . unAnn . unHFix))
-  destruct (HFix (Ann (e :*: _))) = return e
-
-instance (HFunctor f, Show (Some (HFix f))) => Monadic f (HFix f) IO where
-  construct = let m x = do { print ("Cnst", Some x) ; return x } in m . HFix
-  destruct x          = do { print ("Dstr", Some x) ; return $ unHFix x }
+instance (Functor f, Show (Fix f)) => AuthMonad f (Fix f) IO where
+  construct = let m x = do { print ("Cnst", x) ; return x } in m . In
+  destruct x          = do { print ("Dstr", x) ; return $ out x }
 
 
 {- Prover -}
 
-type VO f = [Some (f (K D))]
-type Collision f = (Some (f (K D)), Some (f (K D)))
-
-type Prv f a = Prover f (MSem f (HFix (Annot f)) (Prover f) a)
+type VO f = [f D]
+type Prv f a = Prover f (MSem f (Fix (Annot f)) (Prover f) a)
 newtype Prover f a = Prover { unProver ∷ Writer (VO f) a }
                 deriving (Monad, MonadWriter (VO f))
 
 {- Inefficient Prover (works on unannotated trees) -}
 
-instance (HHashable f, HFunctor f) ⇒ Monadic f (HFix f) (Prover f) where
-  construct = return . HFix
-  destruct (HFix e) = do
-    tell [Some $ hfmap (hcata hhash) e]
+instance (HHashable f, Functor f) ⇒ AuthMonad f (Fix f) (Prover f) where
+  construct = return . In
+  destruct (In e) = do
+    tell [fmap (cata hhash) e]
     return e
 
 {- More efficient Prover (works on annotated trees) -}
 
-instance (HHashable f, HFunctor f, Serialize (Some (f (K D)))) ⇒ Monadic f (HFix (Annot f)) (Prover f) where
-  construct = return . HFix . Ann . (id &&&& hhash . hfmap (hsnd . unAnn . unHFix)) where
-  destruct (HFix (Ann (e :*: _))) = do
-    tell [Some $ hfmap (hsnd . unAnn . unHFix) e]
-    return e
+instance (HHashable f, Functor f, Binary (f D)) ⇒ AuthMonad f (Fix (Annot f)) (Prover f) where
+  construct = return . In . O . fmap (I &&& K . hhash . fmap (unK . hsnd) . unO . out) where
+  destruct (In (O e)) = do
+    tell [fmap (unK . hsnd) e]
+    return $ fmap (unI . hfst) e
 
 runProver ∷ Prover f a → (a, VO f)
 runProver = runWriter . unProver
 
 
 {- Verifier -}
-
 data VerifierError = VerifierError deriving Show
 instance Error VerifierError where strMsg _ = VerifierError
   
-newtype Verifier f a = Verifier { unVerifier ∷ (ErrorT VerifierError (State (VO f))) a }
-                       deriving (Monad, MonadError VerifierError, MonadState (VO f))
-type VSem f a = MSem f (K D) (Verifier f) a
+newtype Verifier f a = Verifier { unVerifier ∷ ErrorT VerifierError (Supply (f D)) a }
+                       deriving (Monad, MonadError VerifierError, MonadSupply (f D))
+type VSem f a = MSem f D (Verifier f) a
 type Vrf f a = Verifier f (VSem f a)
 
-instance (HHashable f) => Monadic f (K D) (Verifier f) where
+instance (HHashable f, MonadError VerifierError m, MonadSupply (f D) m) => AuthMonad f D m where
   construct = return . hhash
-  destruct (K d) = do
-    t':xs <- Control.Monad.State.get
-    when (not $ some (unK . hhash) t' == d) $ throwError VerifierError
-    t <- return $ some unsafeCoerce t'
-    Control.Monad.State.put xs
-    return t
+  destruct d = do
+    t' <- supply
+    when (not $ hhash t' == d) $ throwError VerifierError
+    return $ t'
 
 runVerifier ∷ (HHashable f) => VO f → Verifier f a → Either VerifierError a
-runVerifier vo m = evalState (runErrorT . unVerifier $ m) vo
+runVerifier vo m = runSupplyList (runErrorT . unVerifier $ m) vo
 
 
 {- Extractor -}
+type Collision f = (f D, f D)
 
--- Application (in semantic domain, rather than terms)
-shapp :: Monad m ⇒ m (m a → m b) → a → m b
-shapp f = join . ap f . return . return
-
-extractor ∷ (Eq (Some (f (K D))), HFunctor f, HHashable f) => 
+extractor ∷ (Eq (f D), Functor f, HHashable f) => 
   Prv f a → Vrf f a → VO f → Either (Collision f) (VSem f a)
 extractor prv vrf vo =
   case find collides (zip vo vo') of
@@ -229,67 +246,90 @@ extractor prv vrf vo =
     where
       vo' = snd . runProver $ prv
       collides (x,y) = hash x == hash y && not (x == y)
-      hash = some (unK . hhash)
+      hash = hhash
+      
 
 
 
 
 
-{- Canonical Higher-order functors
-   from http://www.timphilipwilliams.com/posts/2013-01-16-fixing-gadts.html
-   but really based on Multirec, the generic programming library by Andres Löh
--}
 
-newtype HFix h a = HFix { unHFix ∷ h (HFix h) a }
-instance (Show (h (HFix h) a)) => Show (HFix h a) where
-  show = parens . show . unHFix where
+{- Conveniences -}
+
+f `o` g = lam$ \x -> f `app` (g `app` x)
+
+tPair ∷ EDSL term => term (a :→ b :→ a :* b)
+tFst  ∷ EDSL term => term (a :* b :→ a)
+tSnd  ∷ EDSL term => term (a :* b :→ b)
+
+tPair = lam$ \a -> lam$ \b -> a ** b
+tFst  = lam tfst
+tSnd  = lam tsnd
+
+{- This is an alternate encoding of a pair, using Haskell's own tuples. 
+   However, it does not work quite as desired, since interpretation
+   only reduces the term types up to the Base. This isn't too big of a 
+   problem because using lamU, we can still define projection. What 
+   effect does this have on evaluation order? I'm not sure. -}
+
+tPair' ∷ EDSL term => term (a :→ b :→ Base (term a, term b))
+tFst'  ∷ EDSL term => term (Base (term a, term b) :→ a)
+tSnd'  ∷ EDSL term => term (Base (term a, term b) :→ b)
+tPair' = lam$ \a -> lam$ \b -> unit (a,b)
+tFst'  = lamU fst
+tSnd'  = lamU snd
+
+
+--tIf'  ∷ EDSL term => term (Base Bool :→ a :→ a :→ a)
+--tIf' = lam$ \cond -> lam$ \then' -> lam$ \else' -> tif cond then' else'
+
+--tIf'  ∷ EDSL term => term (Base Bool :→ a :→ a :→ a)
+--tIf' = lamU$ \cond -> lam$ \then' -> lam$ \else' -> if cond then then' else else'
+
+--tif' ∷ EDSL term ⇒ term (Base Bool) → term a → term a → term a
+--tif' i t e = tIf' `app` i `app` t `app` e
+
+
+
+
+{- Serialization -}      
+
+instance (Show (f (Fix f))) => Show (Fix f) where
+  show = parens . show . out where
     parens x = "(" ++ x ++ ")"
 
--- Natural transformation
-type f :~> g = forall a. f a → g a
+instance Binary x ⇒ Binary (K x a) where
+  put = Data.Binary.put . unK
+  get = Data.Binary.get >>= return . K
 
--- Higher order functor
-class HFunctor (h ∷ (* → *) → * → *) where
-    hfmap ∷ (f :~> g) → h f :~> h g
-    hmapM :: Monad m => (forall ix. a ix -> m (b ix)) -> (forall ix. h a ix -> m (h b ix))
-    hmapM f = unwrapMonad . htraverse (WrapMonad . f)
-    htraverse :: Applicative f => (forall ix. a ix -> f (b ix)) -> (forall ix. h a ix -> f (h b ix))
-
--- | The product of functors
-data (f :*: g) a = (:*:) { hfst ∷ f a, hsnd ∷ g a } deriving (Show, Functor)
-infixr 6 :*:
-
--- | The higher-order analogue of (&&&) for functor products
-(&&&&) ∷ (f :~> g) → (f :~> g') → f :~> (g :*: g')
-(&&&&) u v x = u x :*: v x
-infixr 3 &&&&
-
-(/\) ∷ (f :~> g) → (f' :~> g') → (f :*: f') :~> (g :*: g')
-(/\) f g (a :*: b) = f a :*: g b
+-- Convenient application
+shapp :: Monad m ⇒ m (m a → m b) → a → m b
+shapp f = join . ap f . return . return
 
 
--- Higher order catamorphism
-hcata ∷ HFunctor h => (h f :~> f) → HFix h :~> f
-hcata alg = alg . hfmap (hcata alg) . unHFix
+{- Equivalence between initial (phoas) and final representation -}
+data MuEDSL ∷ (* → *) → * → * where
+  Unit ∷ a → MuEDSL r (Base a)
+  LamU ∷ (a → MuEDSL r b) → MuEDSL r (Base a :→ b)
+  Var ∷ r a → MuEDSL r a
+  Lam ∷ (r a → MuEDSL r b) → MuEDSL r (a :→ b)
+  App ∷ MuEDSL r (a :→ b) → MuEDSL r a → MuEDSL r b
+  Pair ∷ MuEDSL r a → MuEDSL r b → MuEDSL r (a :* b)
+  TFst ∷ MuEDSL r (a :* b) → MuEDSL r a
+  TSnd ∷ MuEDSL r (a :* b) → MuEDSL r b
+  TIf ∷ MuEDSL r (Base Bool) → MuEDSL r a → MuEDSL r a → MuEDSL r a
+  
+instance EDSL (MuEDSL h) where
+  unit = Unit
+  lamU = LamU
+  lam f = Lam (f . Var)
+  app = App
+  (**) = undefined
+  tfst = undefined
+  tsnd = undefined
+  tif = undefined
 
-hana ∷ HFunctor h => (f :~> h f) → f :~> HFix h
-hana coalg = HFix . hfmap (hana coalg) . coalg
-
-hpara ∷ HFunctor h => (h (f :*: HFix h) :~> f) → (HFix h :~> f)
-hpara psi = psi . hfmap (hpara psi &&&& id) . unHFix
-
--- Standard Functors
-newtype I x = I { unI ∷ x }
-newtype K x y = K { unK ∷ x }
-instance Show x => Show (I x) where show = show . unI
-instance Show x => Show (K x a) where show = show . unK
-instance Serialize x ⇒ Serialize (K x a) where
-  put = Data.Serialize.put . unK
-  get = Data.Serialize.get >>= return . K
-                                      
--- Natural over the index
-
-data Some f = forall a. Some (f a)
-
-some ∷ (forall a. f a → b) → Some f → b
-some f (Some x) = f x
+evaluate' ∷ EDSL term ⇒ MuEDSL term a → term a
+evaluate' (Unit a) = unit a
+evaluate' (Lam f) = lam (evaluate' . f)
+evaluate' (LamU f) = lamU (evaluate' . f)
