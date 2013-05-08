@@ -1,5 +1,5 @@
 {-# LANGUAGE 
-  UnicodeSyntax
+  UnicodeSyntax, FlexibleInstances, FlexibleContexts, UndecidableInstances
   #-}
 
 {- Andrew Miller   May 2013
@@ -14,6 +14,7 @@
 module CircuitValues where
 
 import Data.Maybe
+import Control.Monad.State
 
 data Type =
     Unit
@@ -88,6 +89,60 @@ denote g (Term (_) (Var v)) = fromJust $ lookup v g
 denote g (Term (_) (App f x)) = case (denote g f) of (Value _ (VArr f)) -> f (denote g x)
 
 
+-- Evaluate to normal form (our calculus so far is strongly normalizing)
+tonf ∷ [(String, Term)] → Term → Term
+tonf g (Term Unit TT)               = Term Unit TT
+tonf g (Term t@(_ :+ _) (InjL x))   = Term t (InjL (tonf g x))
+tonf g (Term t@(_ :+ _) (InjR x))   = Term t (InjR (tonf g x))
+tonf g (Term t@(_ :* _) (Pair x y)) = Term t (Pair (tonf g x) (tonf g y))
+tonf g (Term t@(_ :→ _) (Lam v f))  = Term t (Lam v f)
+tonf g (Term t (App f x)) = let Term t (Lam v f) = tonf g f in 
+  tonf ((v, tonf g x) : g) f
+tonf g (Term t (Var v)) = fromJust $ lookup v g
+tonf g (Term t (Case x a b)) = case tonf g x of
+  (Term (_ :+ _) (InjL x)) → tonf g (Term t (a `App` x))
+  (Term (_ :+ _) (InjR x)) → tonf g (Term t (b `App` x))
+tonf g (Term t (ProjL xy)) = let (Term (_ :* _) (Pair x _)) = tonf g xy in x
+tonf g (Term t (ProjR xy)) = let (Term (_ :* _) (Pair _ y)) = tonf g xy in y
+
+
+-- extend l n returns a list of length at least n, padding with Falses
+extend ∷ Int → [Bool] → [Bool]
+extend n l = l ++ map (const False) [1..n-(length l)]
+
+-- all possible bit assignments
+enumerate :: Int -> [a] -> [[a]]
+enumerate 0 _  = [[]]
+enumerate n xs = join [fmap (z:) $ enumerate (n-1) xs | z ← xs]
+
+-- Enumerate the representable normal-form terms for any type
+enumNF ∷ Type → [Term]
+enumNF Unit = [Term Unit TT]
+enumNF t@(a :* b) = join [map (Term t . Pair x) $ enumNF b | x <- enumNF a]
+enumNF t@(a :+ b) = map (Term t . InjL) (enumNF a) ++
+                    map (Term t . InjR) (enumNF b)
+enumNF t@(a :→ b) = 
+  let allAs = enumNF a in
+  let allBmaps = enumerate (length allAs) (enumNF b) in
+  undefined -- associate inputs with outputs?
+
+-- Translate terms to bit assignments
+encode ∷ [(String, Term)] → Term → [Bool]
+encode g (Term Unit TT) = []
+encode g (Term t@(_ :+ _) (InjL x)) = extend (nBits t) $ [False] ++ encode g x
+encode g (Term t@(_ :+ _) (InjR x)) = extend (nBits t) $ [True]  ++ encode g x
+encode g (Term t@(a :* b) (Pair x y)) = encode g x ++ encode g y
+-- Bit-encoding for a lambda means applying 
+encode g (Term t@(a :→ _) (Lam v f)) = extend (nBits t) $ join $ map (\x -> encode ((v,x):g) f) (enumNF a)
+-- Bit-encoding for non-normalized terms begins by normalizing them
+encode g t@(Term (_) (Var v))      = encode g (tonf g t)
+encode g t@(Term (_) (App _ _))    = encode g (tonf g t)
+encode g t@(Term (_) (Case _ _ _)) = encode g (tonf g t)
+encode g t@(Term (_) (ProjL _))    = encode g (tonf g t)
+encode g t@(Term (_) (ProjR _))    = encode g (tonf g t)
+
+
+-- Compile terms to circuits
 type Wire = Int
 data Gate = 
     And Wire Wire Wire
@@ -100,35 +155,50 @@ data Gate =
 type Circuit = [Gate]
 type WireCon = [(String, Wire)]
 
--- extend l n returns a list of length at least n, padding with Falses
-extend ∷ Int → [Bool] → [Bool]
-extend n l = l ++ map (const False) [1..n-(length l)]
+class Monad m ⇒ MonadWire m where
+  fresh ∷ m Wire
+  place ∷ (Wire → Gate) → m Wire
+
+instance MonadState (Int, [Gate]) m ⇒ MonadWire m where
+  fresh = do { (x,c) <- get; put (x+1, c); return x }
+  place gate = do { (x,c) <- get; put (x+1, (gate x) : c); return x}
+
+runWire ∷ Term → Circuit
+runWire t = reverse . snd $ execState (compile [] (tonf [] t)) (0,[])
+
+-- Doesn't go to nf first
+runWire' ∷ Term → Circuit
+runWire' t = reverse . snd $ execState (compileClosed [] t) (0,[])
+
+compileClosed ∷ MonadWire m ⇒ [(String, [Wire])] → Term → m [Wire]
+compileClosed g (Term (a :→ b) (Lam v f)) = do
+  inputs ← mapM (const fresh) [1..nBits a]
+  compile ((v, inputs) : g) f
+compileClosed g t = compile g t
 
 
 
--- Translate terms to bit assignments
-encode ∷ Value → [Bool]
-encode (Value Unit (VUnit ())) = []
-encode (Value t@(_ :+ _) (VSum (Left x))) = extend (nBits t) $ [False] ++ encode x
-encode (Value t@(_ :+ _) (VSum (Right x))) = extend (nBits t) $ [True]  ++ encode x
-encode (Value (a :* b) (VPair (x, y))) = encode x ++ encode y
-encode (Value (_ :→ _) (VArr f)) = undefined
+compile ∷ MonadWire m ⇒ [(String, [Wire])] → Term → m [Wire]
+compile g (Term Unit TT) = return []
+compile g (Term t@(a :+ _) (InjL x)) = do
+  flag <- place Lo
+  body <- compile g x
+  pad <- mapM (const$ place Lo) [1..nBits t - nBits a - 1]
+  return$ flag : body ++ pad
+compile g (Term t@(_ :+ b) (InjR x)) = do
+  flag <- place Hi
+  body <- compile g x
+  pad <- mapM (const$ place Lo) [1..nBits t - nBits b - 1]
+  return$ flag : body ++ pad
+compile g (Term _ (Pair x y)) = sequence [compile g x, compile g y] >>= return . join
+compile g (Term (a :* _) (ProjL xy)) = compile g xy >>= return . take (nBits a)
+compile g (Term (a :* _) (ProjR xy)) = compile g xy >>= return . drop (nBits a)
+compile g (Term t (Var v)) = return $ fromJust $ lookup v g
+-- find the bit encoding of this function and assign constant to this many wires
+compile g (Term (a :→ b) (Lam v f)) = (>>= return . join) $ mapM (\x -> compile [] x >>= \x' -> compile ((v,x'):g) f) (enumNF a)
+compile g (Term t (App f x)) = undefined -- evaluate x as a multiplexer
 
-{-
-encode ∷ [(String, Value)] → Term → [Bool]
-encode g (Term Unit TT) = []
-encode g (Term t@(_ :+ _) (InjL x)) = extend (nBits t) $ [False] ++ encode g x
-encode g (Term t@(_ :+ _) (InjR x)) = extend (nBits t) $ [True]  ++ encode g x
-encode g (Term t@(_) (Case x a b))  = let flag : body = encode g x in
-  extend (nBits t) (if flag then encode g a else encode g b)
-encode g (Term (a :* b) (Pair x y)) = encode g x ++ encode g y
-encode g (Term (_) (ProjL xy@(Term (t :* _) _))) = take (nBits t) (encode g xy)
-encode g (Term (_) (ProjR xy@(Term (t :* _) _))) = drop (nBits t) (encode g xy)
-encode g (Term (_ :→ _) (Lam v f)) = undefined
-encode g (Term (_) (Var v)) = fromJust $ lookup v g
-encode g (Term (_) (App f x)) = undefined
--}
 
--- Compile terms to circuits
---compile ∷ WireCon → Int → Term → Circuit
---compile g n (Term Unit TT) = []
+ex0 = runWire (Term (tBit :* tBit) (Pair lo hi))
+ex1 = runWire (Term (tBit :+ Unit) (InjL lo))
+ex2 = runWire (Term (tBit :+ Unit) (InjR (Term Unit TT)))
