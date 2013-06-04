@@ -54,7 +54,11 @@ One ≟T (v ⊗ v₁) = no (λ ())
 One ≟T (v ⊕ v₁) = no (λ ())
 One ≟T v ⇒ v₁ = no (λ ())
 One ≟T (v ● x) = no (λ ())
-(x ⊗ x₁) ≟T y = {!!}
+(x ⊗ x₁) ≟T One = {!!}
+(x ⊗ x₁) ≟T (y ⊗ y₁) = {!!}
+(x ⊗ x₁) ≟T (y ⊕ y₁) = {!!}
+(x ⊗ x₁) ≟T y ⇒ y₁ = {!!}
+(x ⊗ x₁) ≟T (y ● x₂) = {!!}
 (x ⊕ x₁) ≟T y = {!!}
 x ⇒ x₁ ≟T y = {!!}
 (x ● x₁) ≟T y = {!!}
@@ -171,7 +175,7 @@ module Merkle0Lang (MK : MerkleKit) where
       -- Verifier uses only a constant D and no need to recurse (constant functor)
       -- Prover pairs the fixpoint with a D
       tt⟦_⟧m : Set → Set
-      check : ∀ {τ} {wf : Wf● τ} → t⟦ τ ● wf ⟧d M ∥ tt⟦_⟧m → M (t⟦ τ ⟧d M ∥ tt⟦_⟧m)
+      check : ∀ {τ} → (wf : Wf● τ) → t⟦ τ ● wf ⟧d M ∥ tt⟦_⟧m → M (t⟦ τ ⟧d M ∥ tt⟦_⟧m)
       place : ∀ {τ} → (wf : Wf● τ) → t⟦ τ ⟧d M ∥ tt⟦_⟧m → t⟦ τ ● wf ⟧d M ∥ tt⟦_⟧m
 
     open RawMonad monad_ public
@@ -197,7 +201,7 @@ module Merkle0Lang (MK : MerkleKit) where
       ; return = id
       }
     ; tt⟦_⟧m = id
-    ; check = id
+    ; check = λ wf → id
     ; place = λ wf → id
     }
 
@@ -221,8 +225,8 @@ module Merkle0Lang (MK : MerkleKit) where
     where
       ret' : ∀ {a} → a → List VO × a
       ret' a = [] , a
-      check' : ∀ {τ} {wf : Wf● τ} → t⟦ τ ● wf ⟧P → tM⟦ τ ⟧P
-      check' {τ} {wf} (d , v) = Data.List.[] , v --Data.List.[ shallow {τ} {wf} v ] , {!!} --dat
+      check' : ∀ {τ} (wf : Wf● τ) → t⟦ τ ● wf ⟧P → tM⟦ τ ⟧P
+      check' {τ} wf (d , v) = Data.List.[] , v --Data.List.[ shallow {τ} {wf} v ] , {!!} --dat
       place' : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧P → tM⟦ τ ● wf ⟧P
       place' {τ} {wf} v = Data.List.[] , (hash-s {τ} {wf} (shallow {τ} {wf} v) , v)
 
@@ -249,9 +253,9 @@ module Merkle0Lang (MK : MerkleKit) where
       bind' ma f vo with ma vo
       ... | inj₂ (vo' , a) = f a vo'
       ... | inj₁ unit = inj₁ unit
-      check : ∀ {τ} {wf : Wf● τ} → t⟦ τ ● wf ⟧V → tM⟦ τ ⟧V
-      check dig [] = inj₁ unit
-      check {τ} {wf} dig ((τ' , wf' , dat) ∷ vo) with τ' ≟T τ
+      check : ∀ {τ} (wf : Wf● τ) → t⟦ τ ● wf ⟧V → tM⟦ τ ⟧V
+      check wf dig [] = inj₁ unit
+      check {τ} wf dig ((τ' , wf' , dat) ∷ vo) with τ' ≟T τ
       ... | no  _ = inj₁ unit
       ... | yes pf with hash {τ} {wf} (subst id (eq-shal pf) dat) ≟D dig
       ... | yes pf' = inj₂ (vo , subst id (VO-iso {τ} {wf}) (subst id (eq-shal pf) dat))
