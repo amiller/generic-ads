@@ -12,9 +12,8 @@ open import Data.Colist hiding (_++_)
 
 
 module MerkleSTLC where
-
-postulate Data : Set
   
+
 mutual
   data Ty : Set where
     One : Ty
@@ -30,14 +29,8 @@ mutual
     wf⊗ : ∀ {τ₀ τ₁} → Wf● τ₀ → Wf● τ₁ → Wf● (τ₀ ⊗ τ₁)
     wf● : ∀ {τ} → (wf : Wf● τ) → Wf● (τ ● wf)
 
-infixr 70 _⇒_
 
-record Merkle0Kit : Set₁ where
-  field
-    D : Set
-    hash : Data → D                       -- Hash function
-    _≟D_ : (x y : D)    → Dec (x ≡ y)     -- Decidable equality for digests
-    _≟V_ : (x y : Data) → Dec (x ≡ y)     -- Decidable equality for data
+infixr 70 _⇒_
 
 data Con : Set where
   ε : Con
@@ -56,20 +49,65 @@ _!!_ : ∀ {Val Γ σ} → Env {Val} Γ → Var Γ σ → Val σ
 (x :: ρ) !! suc x₁ = ρ !! x₁
 
 
-module Merkle0Lang (MK : Merkle0Kit) where
-  open Merkle0Kit MK
+_≟DT_ : (x y : dTy) → Dec (x ≡ y)     -- Decidable equality for types
+x ≟DT y = {!!}
 
+
+_≟T_ : (x y : Ty) → Dec (x ≡ y)     -- Decidable equality for types
+One ≟T One = yes refl
+One ≟T (v ⊗ v₁) = no (λ ())
+One ≟T (v ⊕ v₁) = no (λ ())
+One ≟T v ⇒ v₁ = no (λ ())
+One ≟T (v ● x) = no (λ ())
+(x ⊗ x₁) ≟T y = {!!}
+(x ⊕ x₁) ≟T y = {!!}
+x ⇒ x₁ ≟T y = {!!}
+(x ● x₁) ≟T y = {!!}
+
+record MerkleKit : Set₁ where
+  field
+    D : Set
+    _≟D_ : (x y : D) → Dec (x ≡ y)     -- Decidable equality for digests
+
+module Merkle0Lang (MK : MerkleKit) where
+  open MerkleKit MK
+
+  Shallow : (τ : Ty) → (wf : Wf● τ) → Set
+  Shallow (One) (wf) = Unit
+  Shallow (τ₀ ⊗ τ₁) (wf⊗ wf₀ wf₁) = Shallow (τ₀) (wf₀) × Shallow (τ₁) (wf₁)
+  Shallow (τ₀ ⊕ τ₁) (wf⊕ wf₀ wf₁) = Shallow (τ₀) (wf₀) ⊎ Shallow (τ₁) (wf₁)
+  Shallow (τ ⇒ τ₁) (())
+  Shallow (τ ● x) (wf) = D
+
+  Shallow' : dTy → Set
+  Shallow' (One , wf) = Unit
+  Shallow' (τ₀ ⊗ τ₁ , wf⊗ wf₀ wf₁) = Shallow' (τ₀ , wf₀) × Shallow' (τ₁ , wf₁)
+  Shallow' (τ₀ ⊕ τ₁ , wf⊕ wf₀ wf₁) = Shallow' (τ₀ , wf₀) ⊎ Shallow' (τ₁ , wf₁)
+  Shallow' (τ ⇒ τ₁ , ())
+  Shallow' (τ ● x , wf) = D
+
+  postulate 
+    hash : ∀ {τ wf} → Shallow τ wf → D
+    _≟V_ : ∀ {τ wf} → (x y : Shallow τ wf) → Dec (x ≡ y)     -- Decidable equality for data
+    eq-shal : ∀ {τ₀ τ₁} → {wf₀ : Wf● τ₀} → {wf₁ : Wf● τ₁} → Dec (Shallow τ₀ wf₀ ≡ Shallow τ₁ wf₁)
+
+  eq-shal' : ∀ {τ₀ τ₁} → {wf₀ : Wf● τ₀} → {wf₁ : Wf● τ₁} → Dec (Shallow τ₀ wf₀ ≡ Shallow τ₁ wf₁)
+  eq-shal' {One} {One} = {!!}
+  eq-shal' {One} {τ₀ ⊗ τ₁} {wf₀} {wf⊗ wf₁ wf₂} = no (λ x → {!!})
+  eq-shal' {One} {_} {wf₀} {wf₁} = no (λ ())
+  eq-shal' {τ₀ ⊗ τ₁} = {!!}
+  eq-shal' {τ₀ ⊕ τ₁} = {!!}
+  eq-shal' {τ₀ ⇒ τ₁} = {!!}
+  eq-shal' {τ₀ ● x} = {!!}
+
+  VO : Set
+  VO = Σ Ty λ τ → Σ (Wf● τ) λ wf → Shallow τ wf
 
   data Term : Con → Ty → Set where
     var   : ∀ {Γ τ} → Var Γ τ → Term Γ τ
     lam   : ∀ {Γ σ τ} → Term (Γ ⊙ σ) τ → Term Γ (σ ⇒ τ)
     app   : ∀ {Γ σ τ} → Term Γ (σ ⇒ τ) → Term Γ σ → Term Γ τ
     auth  : ∀ {Γ τ} → Term Γ τ → (wf : Wf● τ) → Term Γ (τ ● wf)
-
-
-
-  open import Category.Monad
-  open import Category.Monad.Indexed
 
   -- General form of type denotation (parameterized by a monad and a functor)
   t⟦_⟧d_∥_ : Ty → (Set → Set) → (Set → Set) → Set
@@ -78,6 +116,61 @@ module Merkle0Lang (MK : Merkle0Kit) where
   t⟦ τ₁ ⇒ τ₂ ⟧d M ∥ f = M (t⟦ τ₁ ⟧d M ∥ f) → M (t⟦ τ₂ ⟧d M ∥ f)
   t⟦ τ₀ ⊕ τ₁ ⟧d M ∥ f = t⟦ τ₀ ⟧d M ∥ f ⊎ t⟦ τ₁ ⟧d M ∥ f
   t⟦ τ₀ ⊗ τ₁ ⟧d M ∥ f = t⟦ τ₀ ⟧d M ∥ f × t⟦ τ₁ ⟧d M ∥ f
+
+  Mv Mi Mp : Set → Set
+  Mv a = List VO → Unit ⊎ List VO × a
+  Mi a = a
+  Mp a = List VO × a
+
+  Fv Fi Fp : Set → Set
+  Fv a = D
+  Fi a = a
+  Fp a = D × a
+
+  {- Data conversions for auth-types -}
+
+  t⟦_⟧V t⟦_⟧I t⟦_⟧P : Ty → Set
+  t⟦ τ ⟧V = t⟦ τ ⟧d Mv ∥ Fv
+  t⟦ τ ⟧I = t⟦ τ ⟧d Mi ∥ Fi
+  t⟦ τ ⟧P = t⟦ τ ⟧d Mp ∥ Fp
+
+  tM⟦_⟧V tM⟦_⟧I tM⟦_⟧P : Ty → Set
+  tM⟦_⟧V = Mv ∘ t⟦_⟧V
+  tM⟦_⟧I = Mi ∘ t⟦_⟧I
+  tM⟦_⟧P = Mp ∘ t⟦_⟧P
+
+  VO-iso : ∀ {τ} {wf} → Shallow τ wf ≡ t⟦ τ ⟧V
+  VO-iso {One} {wf} = refl
+  VO-iso {τ₀ ⊗ τ₁} {wf⊗ wf₀ wf₁} = cong₂ _×_ (VO-iso {τ₀} {wf₀}) (VO-iso {τ₁} {wf₁})
+  VO-iso {τ₀ ⊕ τ₁} {wf⊕ wf₀ wf₁} = cong₂ _⊎_ (VO-iso {τ₀} {wf₀}) (VO-iso {τ₁} {wf₁})
+  VO-iso {τ ⇒ τ₁} {()}
+  VO-iso {τ ● x} = refl
+
+  shallow : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧P → t⟦ τ ⟧V
+  shallow {One} {wf} v = v
+  shallow {τ₀ ⊗ τ₁} {wf⊗ wf₀ wf₁} (v₀ , v₁) = shallow {τ₀} {wf₀} v₀ , shallow {τ₁} {wf₁} v₁
+  shallow {τ₀ ⊕ τ₁} {wf⊕ wf₀ wf₁} (inj₁ x) = inj₁ (shallow {τ₀} {wf₀} x)
+  shallow {τ₀ ⊕ τ₁} {wf⊕ wf₀ wf₁} (inj₂ y) = inj₂ (shallow {τ₁} {wf₁} y)
+  shallow {τ₀ ⇒ τ₁} {()} _
+  shallow {τ ● .wf} {wf● wf} (d , v) = d
+
+  hash-s : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧V → D
+  hash-s {τ} {wf} = hash {τ} {wf} ∘ (subst id VO-iso)
+
+  merkleize : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧I → t⟦ τ ⟧P
+  merkleize {One} {_} Unit = Unit
+  merkleize {τ ⊗ τ₁} {wf⊗ wf₀ wf₁} (x , y) = merkleize {τ} {wf₀} x , merkleize {τ₁} {wf₁} y
+  merkleize {τ ⊕ τ₁} {wf⊕ wf₀ _} (inj₁ x) = inj₁ (merkleize {τ} {wf₀} x)
+  merkleize {τ ⊕ τ₁} {wf⊕ _ wf₁} (inj₂ y) = inj₂ (merkleize {τ₁} {wf₁} y)
+  merkleize {τ ⇒ τ₁} {()} _
+  merkleize {τ ● ._} {wf● wf} i with merkleize {τ} {wf} i
+  ... | m = hash-s {τ} {wf} (shallow {τ} {wf} m) , m
+
+
+  {- AuthModel -}
+
+  open import Category.Monad
+  open import Category.Monad.Indexed
 
   record AuthModel : Set₁ where
     field
@@ -120,40 +213,30 @@ module Merkle0Lang (MK : Merkle0Kit) where
     ; place = λ wf → id
     }
 
-  t⟦_⟧I : Ty → Set
-  t⟦_⟧I = Denote.ttm Identity
-
   ⟦_⟧I : ∀ {Γ τ} → Term Γ τ → Env {t⟦_⟧I} Γ → t⟦ τ ⟧I
   ⟦_⟧I = Denote.⟦_⟧m Identity
-
-  tM⟦_⟧I : Ty → Set
-  tM⟦_⟧I = AuthModel.M Identity ∘ t⟦_⟧I
 
 
   {- Prover section -}
 
   Prover : AuthModel
   Prover = record
-    { M = λ a → List Data × a
+    { M = Mp
     ; monad_ = record 
       { _>>=_ = λ ma f → (proj₁ ma) ++ proj₁ (f (proj₂ ma)) , proj₂ (f (proj₂ ma))
       ; return = ret'
       }
-    ; tt⟦_⟧m = ttm
-    ; check = λ dat → {!!} --Data.List.[_] dat × {!!} --dat
-    ; place = {!!} ret'
+    ; tt⟦_⟧m = Fp
+    ; check = check'
+    ; place = place'
     }
     where
-      ttm : Set → Set
-      ttm = λ x → D × x
-      ret' : ∀ {a} → a → List Data × a
+      ret' : ∀ {a} → a → List VO × a
       ret' a = [] , a
-
-  t⟦_⟧P : Ty → Set
-  t⟦_⟧P = Denote.ttm Prover
-
-  tM⟦_⟧P : Ty → Set
-  tM⟦_⟧P = AuthModel.M Prover ∘ t⟦_⟧P
+      check' : ∀ {τ} {wf : Wf● τ} → t⟦ τ ● wf ⟧P → tM⟦ τ ⟧P
+      check' {τ} {wf} (d , v) = Data.List.[] , v --Data.List.[ shallow {τ} {wf} v ] , {!!} --dat
+      place' : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧P → tM⟦ τ ● wf ⟧P
+      place' {τ} {wf} v = Data.List.[] , (hash-s {τ} {wf} (shallow {τ} {wf} v) , v)
 
   ⟦_⟧P : ∀ {Γ τ} → Term Γ τ → Env {tM⟦_⟧P} Γ → tM⟦ τ ⟧P
   ⟦_⟧P t ρ = Denote.⟦_⟧m Prover t ρ
@@ -163,55 +246,31 @@ module Merkle0Lang (MK : Merkle0Kit) where
 
   Verifier : AuthModel
   Verifier = record
-    { M = M
+    { M = Mv
     ; monad_ = record
       { _>>=_ = bind'
       ; return = ret'
       }
-    ; check = {!!}
+    ; check = check
     ; place = {!!} --ret' ∘ hash
-    ; tt⟦_⟧m = λ _ → D
+    ; tt⟦_⟧m = Fv
     } where
-      M : Set → Set
-      M = λ a → List Data → ⊤ ⊎ List Data × a
-      ret' : ∀ {a} → a → M a
+      ret' : ∀ {a} → a → Mv a
       ret' a = λ vo → inj₂ (vo , a)
-      bind' : ∀ {a b} → M a → (a → M b) → M b
+      bind' : ∀ {a b} → Mv a → (a → Mv b) → Mv b
       bind' ma f vo with ma vo
       ... | inj₂ (vo' , a) = f a vo'
-      ... | inj₁ tt = inj₁ tt
-      check : D → M Data
-      check dig [] = inj₁ tt
-      check dig (dat ∷ vo) with hash dat ≟D dig
-      ... | yes _ = inj₂ (vo , dat)
-      ... | no  _ = inj₁ tt
-
-  t⟦_⟧V : Ty → Set
-  t⟦_⟧V = Denote.ttm Verifier
-
-  tM⟦_⟧V : Ty → Set
-  tM⟦_⟧V = AuthModel.M Verifier ∘ t⟦_⟧V
+      ... | inj₁ unit = inj₁ unit
+      check : ∀ {τ} {wf : Wf● τ} → t⟦ τ ● wf ⟧V → tM⟦ τ ⟧V
+      check dig [] = inj₁ unit
+      check {τ} {wf} dig ((τ' , wf' , dat) ∷ vo) with eq-shal {τ'} {τ} {wf'} {wf}
+      ... | no  _ = inj₁ unit
+      ... | yes pf with hash {τ} {wf} (subst id pf dat) ≟D dig
+      ... | yes pf' = inj₂ (vo , subst id VO-iso (subst id pf dat))
+      ... | no _ = inj₁ unit
 
   ⟦_⟧V : ∀ {Γ τ} → Term Γ τ → Env {tM⟦_⟧V} Γ → tM⟦ τ ⟧V
   ⟦_⟧V = Denote.⟦_⟧m Verifier
-
-
-  {- Data conversions for auth-types -}
-
-  shallow : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧P → t⟦ τ ⟧V
-  shallow = {!!}
-
-  hash-s : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧V → D
-  hash-s = {!!}
-
-  merkleize : ∀ {τ} → (wf : Wf● τ) → t⟦ τ ⟧I → t⟦ τ ⟧P
-  merkleize {One} _ ⊤ = ⊤
-  merkleize {τ ⊗ τ₁} (wf⊗ wf₀ wf₁) (x , y) = merkleize wf₀ x , merkleize wf₁ y
-  merkleize {τ ⊕ τ₁} (wf⊕ wf₀ _) (inj₁ x) = inj₁ (merkleize wf₀ x)
-  merkleize {τ ⊕ τ₁} (wf⊕ _ wf₁) (inj₂ y) = inj₂ (merkleize wf₁ y)
-  merkleize {τ ⇒ τ₁} () _
-  merkleize {τ ● ._} (wf● wf) i with merkleize wf i
-  ... | m = hash-s {τ} {wf} (shallow {τ} {wf} m) , m
 
 
 
@@ -219,18 +278,18 @@ module Merkle0Lang (MK : Merkle0Kit) where
 
   mutual
     rel-correct : {τ : Ty} → t⟦ τ ⟧V → t⟦ τ ⟧I → t⟦ τ ⟧P → Set
-    rel-correct {One} v i p = ⊤
+    rel-correct {One} v i p = Unit
     rel-correct {τ₀ ⊗ τ₁} (v₀ , v₁) (i₀ , i₁) (p₀ , p₁) = rel-correct {τ₀} v₀ i₀ p₀ × rel-correct {τ₁} v₁ i₁ p₁
     rel-correct {τ₀ ⊕ τ₁} (inj₁ v) (inj₁ i) (inj₁ p) = rel-correct {τ₀} v i p
     rel-correct {τ₀ ⊕ τ₁} (inj₂ v) (inj₂ i) (inj₂ p) = rel-correct {τ₁} v i p
     rel-correct {τ₀ ⊕ τ₁} _ _ _ = ⊥
-    rel-correct {τ₀ ⇒ τ₁} v i p = ∀ {v'} {i'} {p'} → rel-correct {τ₀} v' i' p' → m-rel-correct {τ₁} (v (AuthModel.return Verifier v')) (i i') (p (AuthModel.return Prover p'))
-    rel-correct {τ ● wf} v i p = p ≡ merkleize {τ ● wf} (wf● wf) i × hash-s {τ ● wf} {wf● wf} (shallow {τ ● wf} {wf● wf} p) ≡ v
+    rel-correct {τ₀ ⇒ τ₁} v i p = ∀ {v'} {i'} {p'} → m-rel-correct {τ₀} v' i' p' → m-rel-correct {τ₁} (v v') (i i') (p p')
+    rel-correct {τ ● wf} v i p = p ≡ merkleize {τ ● wf} {wf● wf} i × hash-s {τ ● wf} {wf● wf} (shallow {τ ● wf} {wf● wf} p) ≡ v
 
     m-rel-correct : {τ : Ty} → tM⟦ τ ⟧V → tM⟦ τ ⟧I → tM⟦ τ ⟧P → Set
     m-rel-correct {τ} v i (vo , p) = ∀ rest → rel' rest (v (vo ++ rest)) where
-      rel' : List Data → ⊤ ⊎ List Data × t⟦ τ ⟧V → Set
-      rel' _ (inj₁ ⊤) = ⊥
+      rel' : List VO → Unit ⊎ List VO × t⟦ τ ⟧V → Set
+      rel' _ (inj₁ Unit) = ⊥
       rel' rest (inj₂ (vo' , v')) = vo' ≡ rest × rel-correct {τ} v' i p
 
   collision : Set
