@@ -20,7 +20,7 @@ mutual
     _⊗_ : Ty → Ty → Ty
     _⊕_ : Ty → Ty → Ty
     _⇒_ : Ty → Ty → Ty
-    _●_ : (τ : Ty) → .(Wf● τ) → Ty
+    _●_ : (τ : Ty) → (Wf● τ) → Ty
   data Wf● : Ty → Set where
     wfOne : Wf● One
     wf⊕ : ∀ {τ₀ τ₁} → Wf● τ₀ → Wf● τ₁ → Wf● (τ₀ ⊕ τ₁)
@@ -47,6 +47,33 @@ _!!_ : ∀ {Val Γ σ} → Env {Val} Γ → Var Γ σ → Val σ
 (x :: ρ) !! suc x₁ = ρ !! x₁
 
 
+inv⊗L : ∀ {α β δ γ} → (α ⊗ β ≡ δ ⊗ γ) → α ≡ δ
+inv⊗L {.α} {β} {α} {.β} refl = refl
+
+inv⊗R : ∀ {α β δ γ} → (α ⊗ β ≡ δ ⊗ γ) → β ≡ γ
+inv⊗R {.α} {β} {α} {.β} refl = refl
+
+inv⊕L : ∀ {α β δ γ} → (α ⊕ β ≡ δ ⊕ γ) → α ≡ δ
+inv⊕L {.α} {β} {α} {.β} refl = refl
+
+inv⊕R : ∀ {α β δ γ} → (α ⊕ β ≡ δ ⊕ γ) → β ≡ γ
+inv⊕R {.α} {β} {α} {.β} refl = refl
+
+inv⇒L : ∀ {α β δ γ} → (α ⇒ β ≡ δ ⇒ γ) → α ≡ δ
+inv⇒L {.α} {β} {α} {.β} refl = refl
+
+inv⇒R : ∀ {α β δ γ} → (α ⇒ β ≡ δ ⇒ γ) → β ≡ γ
+inv⇒R {.α} {β} {α} {.β} refl = refl
+
+inv● : ∀ {n m wf wf1} → (n ● wf ≡ m ● wf1) → n ≡ m
+inv● refl = refl 
+
+irrel : ∀ {τ} (x y : Wf● τ) → x ≡ y
+irrel {One} wfOne wfOne = refl
+irrel {τ ⊗ τ₁} (wf⊗ x x₁) (wf⊗ y y₁) = cong₂ wf⊗ (irrel x y) (irrel x₁ y₁)
+irrel {τ ⊕ τ₁} (wf⊕ x x₁) (wf⊕ y y₁) = cong₂ wf⊕ (irrel x y) (irrel x₁ y₁)
+irrel {τ ⇒ τ₁} () ()
+irrel {τ ● x} (wf● ._) (wf● ._) = refl
 
 _≟T_ : (x y : Ty) → Dec (x ≡ y)     -- Decidable equality for types
 One ≟T One = yes refl
@@ -54,14 +81,42 @@ One ≟T (v ⊗ v₁) = no (λ ())
 One ≟T (v ⊕ v₁) = no (λ ())
 One ≟T v ⇒ v₁ = no (λ ())
 One ≟T (v ● x) = no (λ ())
-(x ⊗ x₁) ≟T One = {!!}
-(x ⊗ x₁) ≟T (y ⊗ y₁) = {!!}
-(x ⊗ x₁) ≟T (y ⊕ y₁) = {!!}
-(x ⊗ x₁) ≟T y ⇒ y₁ = {!!}
-(x ⊗ x₁) ≟T (y ● x₂) = {!!}
-(x ⊕ x₁) ≟T y = {!!}
-x ⇒ x₁ ≟T y = {!!}
-(x ● x₁) ≟T y = {!!}
+(x ⊗ x₁) ≟T One = no (λ ())
+(x ⊗ x₁) ≟T (y ⊗ y₁) with x ≟T y
+(x ⊗ x₁) ≟T (.x ⊗ y₁) | yes refl with x₁ ≟T y₁
+(x ⊗ x₁) ≟T (.x ⊗ .x₁) | yes refl | yes refl = yes refl
+(x ⊗ x₁) ≟T (.x ⊗ y₁) | yes refl | no ¬p = no (¬p ∘ inv⊗R)
+(x ⊗ x₁) ≟T (y ⊗ y₁) | no ¬p = no (¬p ∘ inv⊗L)
+(x ⊗ x₁) ≟T (y ⊕ y₁) = no (λ ())
+(x ⊗ x₁) ≟T y ⇒ y₁ = no (λ ())
+(x ⊗ x₁) ≟T (y ● x₂) = no (λ ())
+(x ⊕ x₁) ≟T One = no (λ ())
+(x ⊕ x₁) ≟T (y ⊗ y₁) = no (λ ())
+(x ⊕ x₁) ≟T (y ⊕ y₁) with x ≟T y
+(x ⊕ x₁) ≟T (.x ⊕ y₁) | yes refl with x₁ ≟T y₁
+(x ⊕ x₁) ≟T (.x ⊕ .x₁) | yes refl | yes refl = yes refl
+(x ⊕ x₁) ≟T (.x ⊕ y₁) | yes refl | no ¬p = no (¬p ∘ inv⊕R)
+(x ⊕ x₁) ≟T (y ⊕ y₁) | no ¬p = no (¬p ∘ inv⊕L)
+(x ⊕ x₁) ≟T y ⇒ y₁ = no (λ ())
+(x ⊕ x₁) ≟T (y ● x₂) = no (λ ())
+x ⇒ x₁ ≟T One = no (λ ())
+x ⇒ x₁ ≟T (y ⊗ y₁) = no (λ ())
+x ⇒ x₁ ≟T (y ⊕ y₁) = no (λ ())
+(x ⇒ x₁) ≟T (y ⇒ y₁) with x ≟T y
+(x ⇒ x₁) ≟T (.x ⇒ y₁) | yes refl with x₁ ≟T y₁
+(x ⇒ x₁) ≟T (.x ⇒ .x₁) | yes refl | yes refl = yes refl
+(x ⇒ x₁) ≟T (.x ⇒ y₁) | yes refl | no ¬p = no (¬p ∘ inv⇒R)
+(x ⇒ x₁) ≟T (y ⇒ y₁) | no ¬p = no (¬p ∘ inv⇒L)
+x ⇒ x₁ ≟T (y ● x₂) = no (λ ())
+(x ● x₁) ≟T One = no (λ ())
+(x ● x₁) ≟T (y ⊗ y₁) = no (λ ())
+(x ● x₁) ≟T (y ⊕ y₁) = no (λ ())
+(x ● x₁) ≟T y ⇒ y₁ = no (λ ())
+(x ● wf) ≟T (y ● wf₁) with x ≟T y
+(x ● wf) ≟T (.x ● wf1) | yes refl with irrel wf wf1
+(x ● wf) ≟T (.x ● .wf) | yes refl | refl = yes refl
+(x ● _) ≟T (y ● _) | no ¬p = no (¬p ∘ inv●)
+
 
 Shal : (D : Set) → (τ : Ty) → (wf : Wf● τ) → Set
 Shal D (One) (wf) = Unit
@@ -81,13 +136,6 @@ module Merkle0Lang (MK : MerkleKit) where
 
   Shallow : (τ : Ty) → (wf : Wf● τ) → Set
   Shallow = Shal D
-
-  irrel : ∀ {τ} (x y : Wf● τ) → x ≡ y
-  irrel {One} wfOne wfOne = refl
-  irrel {τ ⊗ τ₁} (wf⊗ x x₁) (wf⊗ y y₁) = cong₂ wf⊗ (irrel x y) (irrel x₁ y₁)
-  irrel {τ ⊕ τ₁} (wf⊕ x x₁) (wf⊕ y y₁) = cong₂ wf⊕ (irrel x y) (irrel x₁ y₁)
-  irrel {τ ⇒ τ₁} () ()
-  irrel {τ ● _} (wf● _) (wf● _) = refl
 
   eq-shal : ∀ {τ τ' wf wf'} → τ ≡ τ' → Shallow τ wf ≡ Shallow τ' wf'
   eq-shal {τ} {.τ} {wf} {wf'} refl = cong (Shallow τ) (irrel wf wf')
@@ -144,7 +192,7 @@ module Merkle0Lang (MK : MerkleKit) where
   shallow {τ₀ ⊕ τ₁} {wf⊕ wf₀ wf₁} (inj₁ x) = inj₁ (shallow {τ₀} {wf₀} x)
   shallow {τ₀ ⊕ τ₁} {wf⊕ wf₀ wf₁} (inj₂ y) = inj₂ (shallow {τ₁} {wf₁} y)
   shallow {τ₀ ⇒ τ₁} {()} _
-  shallow {τ ● _} {wf● wf} (d , v) = d
+  shallow {τ ● ._} {wf● wf} (d , v) = d
 
   hash-s : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧V → D
   hash-s {τ} {wf} x = hash {τ} {wf} (subst id (sym (VO-iso {τ} {wf})) x)
@@ -155,7 +203,7 @@ module Merkle0Lang (MK : MerkleKit) where
   merkleize {τ ⊕ τ₁} {wf⊕ wf₀ _} (inj₁ x) = inj₁ (merkleize {τ} {wf₀} x)
   merkleize {τ ⊕ τ₁} {wf⊕ _ wf₁} (inj₂ y) = inj₂ (merkleize {τ₁} {wf₁} y)
   merkleize {τ ⇒ τ₁} {()} _
-  merkleize {τ ● _} {wf● wf} i with merkleize {τ} {wf} i
+  merkleize {τ ● ._} {wf● wf} i with merkleize {τ} {wf} i
   ... | m = hash-s {τ} {wf} (shallow {τ} {wf} m) , m
 
 
@@ -226,13 +274,12 @@ module Merkle0Lang (MK : MerkleKit) where
       ret' : ∀ {a} → a → List VO × a
       ret' a = [] , a
       check' : ∀ {τ} (wf : Wf● τ) → t⟦ τ ● wf ⟧P → tM⟦ τ ⟧P
-      check' {τ} wf (d , v) = Data.List.[] , v --Data.List.[ shallow {τ} {wf} v ] , {!!} --dat
-      place' : ∀ {τ} {wf : Wf● τ} → t⟦ τ ⟧P → tM⟦ τ ● wf ⟧P
-      place' {τ} {wf} v = Data.List.[] , (hash-s {τ} {wf} (shallow {τ} {wf} v) , v)
+      check' {τ} wf (d , v) = Data.List.[ τ , wf , subst id (sym (VO-iso {τ} {wf})) (shallow {τ} {wf} v) ] , v
+      place' : ∀ {τ} (wf : Wf● τ) → t⟦ τ ⟧P → t⟦ τ ● wf ⟧P
+      place' {τ} wf v = hash-s {τ} {wf} (shallow {τ} {wf} v) , v
 
   ⟦_⟧P : ∀ {Γ τ} → Term Γ τ → Env {tM⟦_⟧P} Γ → tM⟦ τ ⟧P
   ⟦_⟧P t ρ = Denote.⟦_⟧m Prover t ρ
-
 
   {- Verifier section -}
 
@@ -244,7 +291,7 @@ module Merkle0Lang (MK : MerkleKit) where
       ; return = ret'
       }
     ; check = check
-    ; place = {!!} --ret' ∘ hash
+    ; place = place'
     ; tt⟦_⟧m = Fv
     } where
       ret' : ∀ {a} → a → Mv a
@@ -260,6 +307,8 @@ module Merkle0Lang (MK : MerkleKit) where
       ... | yes pf with hash {τ} {wf} (subst id (eq-shal pf) dat) ≟D dig
       ... | yes pf' = inj₂ (vo , subst id (VO-iso {τ} {wf}) (subst id (eq-shal pf) dat))
       ... | no _ = inj₁ unit
+      place' : ∀ {τ} (wf : Wf● τ) → t⟦ τ ⟧V → t⟦ τ ● wf ⟧V
+      place' {τ} wf v = hash-s {τ} {wf} v
 
   ⟦_⟧V : ∀ {Γ τ} → Term Γ τ → Env {tM⟦_⟧V} Γ → tM⟦ τ ⟧V
   ⟦_⟧V = Denote.⟦_⟧m Verifier
@@ -276,7 +325,7 @@ module Merkle0Lang (MK : MerkleKit) where
     rel-correct {τ₀ ⊕ τ₁} (inj₂ v) (inj₂ i) (inj₂ p) = rel-correct {τ₁} v i p
     rel-correct {τ₀ ⊕ τ₁} _ _ _ = ⊥
     rel-correct {τ₀ ⇒ τ₁} v i p = ∀ {v'} {i'} {p'} → m-rel-correct {τ₀} v' i' p' → m-rel-correct {τ₁} (v v') (i i') (p p')
-    rel-correct {τ ● wf} v i p = {!!} --p ≡ merkleize {τ ● wf} {wf● wf} i × hash-s {τ ● wf} {wf● wf} (shallow {τ ● wf} {wf● wf} p) ≡ v
+    rel-correct {τ ● wf} v i p = p ≡ merkleize {τ ● wf} {wf● wf} i × hash-s {τ ● wf} {wf● wf} (shallow {τ ● wf} {wf● wf} p) ≡ v
 
     m-rel-correct : {τ : Ty} → tM⟦ τ ⟧V → tM⟦ τ ⟧I → tM⟦ τ ⟧P → Set
     m-rel-correct {τ} v i (vo , p) = ∀ rest → rel' rest (v (vo ++ rest)) where
@@ -285,7 +334,7 @@ module Merkle0Lang (MK : MerkleKit) where
       rel' rest (inj₂ (vo' , v')) = vo' ≡ rest × rel-correct {τ} v' i p
 
   collision : Set
-  collision = ∃ (λ {(x , y) → x ≢ y × hash x ≡ hash y})
+  collision = ∃ λ τ → ∃ λ wf → ∃ λ xy → let x , y = xy in x ≢ y × (hash-s {τ} {wf} x ≡ hash-s {τ} {wf} y)
 
 
 
@@ -306,9 +355,15 @@ module Merkle0Lang (MK : MerkleKit) where
   projectP ε = ε
   projectP ((_ , _ , p , _) :: Γ) = p :: projectP Γ
 
+  lemma-project : ∀ {Γ τ} → (ρ : Env {correct-ty} Γ) → (i : Var Γ τ) → m-rel-correct {τ} (⟦ var i ⟧V (projectV ρ)) (⟦ var i ⟧I (projectI ρ)) (⟦ var i ⟧P (projectP ρ))
+  lemma-project ε ()
+  lemma-project ((_ , _ , _ , pf) :: ρ) zero = pf
+  lemma-project (_ :: ρ) (suc i) = lemma-project ρ i
+
   pf-correct : ∀ {Γ τ} (t : Term Γ τ) → (ρ : Env {correct-ty} Γ) → m-rel-correct {τ} (⟦_⟧V {Γ} {τ} t (projectV ρ)) (⟦_⟧I {Γ} {τ} t (projectI ρ)) (⟦_⟧P {Γ} {τ} t (projectP ρ))
   pf-correct {Γ} {τ} t ρ with (⟦ t ⟧V (projectV ρ)) | (⟦ t ⟧I (projectI ρ)) | (⟦ t ⟧P (projectP ρ))
-  pf-correct {Γ} {τ} (var x) ρ | v | i | p = {!!}
+  pf-correct (var zero) (x :: ρ) | v | i | p = {!!}
+  pf-correct {Γ ⊙ σ} {τ} (var (suc x)) (x₁ :: ρ) | v | i | p = {!pf-correct {Γ} {τ} (var x) ρ !}
   pf-correct (lam t) ρ | v | i | p = {!!}
   pf-correct (app t t₁) ρ | v | i | p = {!!}
   pf-correct (auth t wf) ρ | v | i | p = {!!}
@@ -316,6 +371,6 @@ module Merkle0Lang (MK : MerkleKit) where
   pf-correctP : ∀ {Γ τ} (t : Term Γ τ) → Env {correct-ty} Γ → correct-ty τ
   pf-correctP t ρ with (⟦ t ⟧V (projectV ρ)) | (⟦ t ⟧I (projectI ρ)) | (⟦ t ⟧P (projectP ρ))
   pf-correctP (var i) ρ | _ | _ | _ = ρ !! i
-  pf-correctP {_} {τ₁ ⇒ τ₂} (lam f) ρ | v | i | p = ⟦ lam f ⟧V (projectV ρ) , ⟦ lam f ⟧I (projectI ρ) , ⟦ lam f ⟧P (projectP ρ) , {!!}
+  pf-correctP {_} {τ₁ ⇒ τ₂} (lam f) ρ | v | i | p = {!!}
   pf-correctP (app t t₁) ρ | v | i | p = {!!}
-  pf-correctP {_} {τ ● _} (auth x wf) ρ | v | i | p = ⟦ auth x wf ⟧V (projectV ρ) , ⟦ auth x wf ⟧I (projectI ρ) , ⟦ auth x wf ⟧P (projectP ρ) , {!!}
+  pf-correctP {_} {τ ● ._} (auth x wf) ρ | v | i | p = {!!}
